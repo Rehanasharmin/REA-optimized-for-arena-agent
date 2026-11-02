@@ -2,7 +2,7 @@
 name: reverse-engineer-anything
 description: Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA, and build agent environments (AgentEnv bundles) of web applications from a live instance or a capture. Use shipped-artifact or requested runtime evidence to explain features, compare versions, decompile code, or guide a reconstruction. Skip REA for ordinary source-repository architecture analysis.
 metadata:
-  version: "59"
+  version: "60"
 ---
 
 # REA
@@ -12,6 +12,26 @@ requested runtime evidence, or comparison with
 behavior not established by available source. For ordinary analysis of a
 complete source repository, use normal repository tools and do not run REA
 readiness or provider commands.
+
+## Headless shell sandbox
+
+When REA runs in a disposable container or CI box driven by a shell tool — no
+MCP client, no GUI application, no preinstalled engines — read
+[sandbox environment](references/sandbox-environment.md) before the first call
+and follow it for routing. The essentials:
+
+- Source the provisioned exports (`set -a; . ./.rea-sandbox.env; set +a`) and
+  invoke the CLI directly (`node scripts/rea.mjs <command> --json`); there is no
+  registration to repair in such a host, so skip the client-recovery ladders.
+- Prefer the engine-free routes (JavaScript/Electron analysis, deterministic
+  format parsers and archive inventory) and escalate to Ghidra only for a
+  question those cannot answer. Run one native deep-analysis job at a time.
+- Treat an unavailable provider as a stated limit, not a failure to retry:
+  Hopper is macOS-only, and IDA, JEB, Kuna, JADX, ADB, browsers, Frida, LLDB and
+  firmware tooling all require caller-supplied software or hardware.
+- Price output before printing it (`--token-count`, `--token-limit`,
+  `--filter-output`), keep summary-first Evidence, and export a bundle when the
+  result must outlive the session.
 
 ## Connect only when needed
 
@@ -64,6 +84,9 @@ A concrete CLI fallback for an operator-supplied JavaScript tree or ASAR is:
 npx -y rea-agents@latest analyze-javascript-application /absolute/path/to/app --json
 ```
 
+From a repository checkout, the same fallback is
+`node scripts/rea.mjs analyze-javascript-application /absolute/path/to/app --json`,
+which avoids a package download and uses the working tree's engine exports.
 No MCP registration or native engine is required. Read the returned Evidence,
 graph, limitations, and unknowns with the same care as an MCP result; the CLI
 returns the Evidence record directly. This fallback does not establish that
@@ -512,6 +535,9 @@ as complete while required questions remain open.
 - Agent environments (AgentEnv bundles) of a web application, recorded from
   a live instance or a HAR:
   [references/environments.md](references/environments.md)
+- Headless container or CI execution, provisioning, engine availability and
+  host budgets:
+  [references/sandbox-environment.md](references/sandbox-environment.md)
 
 ## Finish the task
 

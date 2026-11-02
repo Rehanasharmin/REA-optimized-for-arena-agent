@@ -26,6 +26,18 @@
 
 </div>
 
+> **This is the sandbox-adapted fork.** Upstream REA is created and maintained by
+> [morluto](https://github.com/morluto) and the REA contributors at
+> [morluto/rea](https://github.com/morluto/rea). The analysis engines, tool
+> catalog, Evidence model, workflow skill and the original README are their work.
+> This fork adds a headless-container profile — a provisioner, a capability
+> verifier and environment-tuned agent guidance — so the same CLI works inside a
+> disposable agent sandbox without a GUI, a desktop client or preinstalled
+> engines. Read the [sandbox guide](../../docs/sandbox-environment.md) and
+> [credits](../../CREDITS.md) first. Provision with
+> `bash scripts/sandbox/provision-sandbox.sh`, verify with
+> `node scripts/sandbox/verify-sandbox.mjs`.
+
 > [!IMPORTANT]
 > Fonti ufficiali di REA: [morluto/rea](https://github.com/morluto/rea), [rea.tools](https://rea.tools/), [rea-agents](https://www.npmjs.com/package/rea-agents) (npm).
 > Segui i link di installazione e delle versioni pubblicate da queste fonti ufficiali. Un nome di repository simile o un README copiato non dimostra che un download sia ufficiale.
