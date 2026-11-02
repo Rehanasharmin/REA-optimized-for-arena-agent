@@ -59,9 +59,14 @@ const main = async () => {
     const args = process.argv.slice(2);
     // Rust consumes --maxMemory once; duplicating it becomes an unknown option.
     // Preserve explicit resource choices rather than injecting another value.
+    //
+    // 3G is unreachable on a 2 GiB CI or agent container: the compiler is then
+    // OOM-killed (exit 137) instead of reporting anything useful. Hosts that
+    // cannot offer it set REA_TS_MAX_MEMORY to a bound they can serve.
+    const maxMemory = process.env.REA_TS_MAX_MEMORY ?? "3G";
     const defaults = [
       ["--checkers", String(Math.min(2, availableParallelism()))],
-      ["--maxMemory", "3G"],
+      ["--maxMemory", maxMemory],
     ].flatMap(([option, value]) =>
       args.includes(option) ? [] : [option, value],
     );

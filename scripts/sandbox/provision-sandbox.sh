@@ -114,14 +114,25 @@ mem_mib() { awk '/^MemTotal:/ {printf "%d\n", $2/1024}' /proc/meminfo; }
 swap_mib() { awk '/^SwapTotal:/ {printf "%d\n", $2/1024}' /proc/meminfo; }
 cpu_count() { getconf _NPROCESSORS_ONLN 2>/dev/null || printf '2\n'; }
 
-# Heap cap for Node-based build tools: this sandbox class has ~2 GiB of RAM and
-# no swap by default, so an unbounded tsc/rolldown run is OOM-killed.
+# Memory budget for build tools. Node steps honour --max-old-space-size; the
+# Rust TypeScript compiler honours REA_TS_MAX_MEMORY. Both are derived from RAM
+# plus swap so a 2 GiB container gets a bound it can serve instead of an OOM kill.
+total_mib() { printf '%s\n' "$(( $(mem_mib) + $(swap_mib) ))"; }
+
 node_heap_mib() {
   local heap
-  heap=$(( $(mem_mib) * 6 / 10 ))
+  heap=$(( $(total_mib) * 5 / 10 ))
   [ "$heap" -gt 4096 ] && heap=4096
   [ "$heap" -lt 512 ] && heap=512
   printf '%s\n' "$heap"
+}
+
+ts_max_memory() {
+  local ts_mib
+  ts_mib=$(( $(total_mib) * 7 / 10 ))
+  [ "$ts_mib" -gt 3584 ] && ts_mib=3584
+  [ "$ts_mib" -lt 1024 ] && ts_mib=1024
+  printf '%sM\n' "$ts_mib"
 }
 
 find_ghidra() {
@@ -152,30 +163,58 @@ step() { log "== $1"; }
 
 # ---------------------------------------------------------------------- steps
 
+swapon_bin() {
+  local candidate
+  for candidate in swapon /sbin/swapon /usr/sbin/swapon /usr/local/sbin/swapon; do
+    if [ -x "$candidate" ] || command -v "$candidate" >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 ensure_swap() {
   step "swap"
-  # `npm ci` re-materializes the whole dependency tree. Without swap that
-  # allocation is OOM-killed mid-install and looks like a corrupt install.
+  # `npm ci` and the Rust TypeScript compiler both allocate more than a 2 GiB
+  # container can serve. Without swap they are OOM-killed (exit 137) mid-run,
+  # which surfaces as "corrupt dependency install" or an unexplained build
+  # failure. A transient swapfile is cheap insurance.
   if [ "$(mem_mib)" -ge 4096 ] || [ "$(swap_mib)" -ge 1024 ]; then
     log "not needed ($(mem_mib) MiB RAM, $(swap_mib) MiB swap)"
     return 0
   fi
   if [ "$CHECK_ONLY" -eq 1 ]; then
-    log "would add a 2 GiB swapfile"
+    log "would add a 2 GiB swapfile (now: $(mem_mib) MiB RAM, $(swap_mib) MiB swap)"
     return 0
   fi
-  if have swapon && [ ! -e /swapfile ]; then
+  local swapon_path
+  swapon_path="$(swapon_bin || true)"
+  if [ -z "$swapon_path" ]; then
+    # util-linux ships swapon; on Debian it lives in /sbin, which is often absent
+    # from a non-root PATH.
+    apt_install_optional util-linux
+    swapon_path="$(swapon_bin || true)"
+  fi
+  [ -n "$swapon_path" ] ||
+    warn "no swapon available; builds stay memory-sensitive (expect exit 137)"
+  if [ -n "$swapon_path" ] && [ ! -e /swapfile ]; then
     run_privileged fallocate -l 2G /swapfile >/dev/null 2>&1 ||
       run_privileged dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none >/dev/null 2>&1 ||
-      warn "could not allocate a swapfile; installs stay memory-sensitive"
+      warn "could not allocate a swapfile; builds stay memory-sensitive"
     if [ -e /swapfile ]; then
       run_privileged chmod 600 /swapfile >/dev/null 2>&1 || true
       run_privileged mkswap /swapfile >/dev/null 2>&1 || true
-      run_privileged swapon /swapfile >/dev/null 2>&1 ||
-        warn "swapon refused; installs stay memory-sensitive"
+      run_privileged "$swapon_path" /swapfile >/dev/null 2>&1 ||
+        warn "swapon refused; builds stay memory-sensitive"
     fi
   fi
-  log "swap available: $(swap_mib) MiB"
+  [ -n "$swapon_path" ] && [ -e /swapfile ] &&
+    run_privileged "$swapon_path" /swapfile >/dev/null 2>&1 || true
+  log "memory available: $(mem_mib) MiB RAM + $(swap_mib) MiB swap"
+  [ "$(swap_mib)" -eq 0 ] &&
+    warn "no swap: a cold TypeScript compile may be OOM-killed"
+  return 0
 }
 
 install_node() {
@@ -359,6 +398,9 @@ write_env_file() {
       "$(printf '%s' "/usr/local/bin:${PATH}" | tr ':' '\n' |
         awk '!seen[$0]++' | paste -sd:)"
     printf 'NODE_OPTIONS=--max-old-space-size=%s\n' "$heap"
+    # Without this the Rust compiler asks for 3 GiB on a 2 GiB host and is
+    # OOM-killed before it can report anything.
+    printf 'REA_TS_MAX_MEMORY=%s\n' "$(ts_max_memory)"
     [ -n "$jdk" ] && printf 'JAVA_HOME=%s\n' "$jdk"
     [ -n "$ghidra" ] && printf 'GHIDRA_INSTALL_DIR=%s\n' "$ghidra"
     [ -n "$pwn" ] && printf 'REA_PWNTOOLS_PYTHON=%s\n' "$pwn"
@@ -400,9 +442,22 @@ build_rea() {
   (cd "$REPO_ROOT" &&
     NODE_OPTIONS="--max-old-space-size=768" npm ci --fund=false --audit=false \
       --maxsockets=6 >/dev/null) || die "npm ci failed (see docs/sandbox-environment.md)"
-  (cd "$REPO_ROOT" &&
-    NODE_OPTIONS="--max-old-space-size=${heap}" npm run build:cached >/dev/null) ||
-    die "npm run build:cached failed"
+  local ts_memory
+  ts_memory="$(ts_max_memory)"
+  # Drop page cache first: on a 2 GiB host a warm npm cache can leave ~1 GiB of
+  # reclaimable pages that hide how little is actually available.
+  run_privileged sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches' >/dev/null 2>&1 ||
+    true
+  if ! (cd "$REPO_ROOT" &&
+    NODE_OPTIONS="--max-old-space-size=${heap}" REA_TS_MAX_MEMORY="$ts_memory" \
+      npm run build:cached >/dev/null); then
+    # A SIGKILL (137) here is memory pressure, not a code error: retry once with
+    # a smaller compiler budget so the tooling stays inside the container.
+    warn "build failed; retrying once with a tighter memory budget (${ts_memory} -> 1024M)"
+    (cd "$REPO_ROOT" &&
+      NODE_OPTIONS="--max-old-space-size=768" REA_TS_MAX_MEMORY=1024M \
+        npm run build:cached) || die "npm run build:cached failed (memory or disk; see docs/sandbox-environment.md)"
+  fi
   log "runtime built: $(node -p "require('${REPO_ROOT}/package.json').version")"
 }
 
@@ -419,6 +474,24 @@ summary() {
   printf '  node scripts/rea.mjs analyze-javascript-application /abs/path/to/app --json\n'
 }
 
+free_disk_mib() { df -Pm "$REPO_ROOT" 2>/dev/null | awk 'NR==2 {print $4}'; }
+
+check_disk() {
+  step "disk"
+  local available
+  available="$(free_disk_mib)"
+  if [ -z "$available" ]; then
+    log "could not determine free space in ${REPO_ROOT}"
+    return 0
+  fi
+  log "${available} MiB free in ${REPO_ROOT}"
+  if [ "$available" -lt 2048 ]; then
+    warn "under 2 GiB free: node_modules (~700 MB), dist and engines need room."
+    warn "Some images mount the workspace on a small tmpfs; move the checkout to"
+    warn "a real filesystem or expect ENOSPC (os error 28) during the build."
+  fi
+}
+
 main() {
   [ "$(uname -s)" = "Linux" ] || die "this provisioner targets Linux sandboxes"
   log "repo: $(uname -m) $(uname -s), $(cpu_count) vCPU, $(mem_mib) MiB RAM"
@@ -427,6 +500,7 @@ main() {
   GHIDRA_HOME_RESOLVED=""
   PWNTOOLS_PYTHON_RESOLVED=""
 
+  check_disk
   ensure_swap
   install_node
   install_jdk
