@@ -98,18 +98,3 @@ See [DISCLAIMER.md](DISCLAIMER.md) for responsible-use guidance. REA is for lawf
 Improvements to the sandbox adaptation belong in this fork's issue tracker and pull requests. Everything else — engines, tool catalog, Evidence model, guides — belongs upstream: [morluto/rea issues](https://github.com/morluto/rea/issues) · [morluto/rea pull requests](https://github.com/morluto/rea/pulls). See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and checks.
 
 ---
-
-### What was removed from the upstream README
-
-To keep this fork's README focused on the sandbox adaptation, the following upstream material is intentionally omitted here and lives upstream:
-
-- The Trendshift "#1 repository" badge and star-history chart
-- The Discord community block
-- The RL environments guide and demo
-- The showcases section (DX-Ball, Notion, TH04)
-- The full ~40-row capability table
-- The FAQ
-- The `npx rea-agents setup` / agent-registration flow (not used in this sandbox)
-- The `rea update` / updater documentation
-
-If you need any of the above, [use upstream](https://github.com/morluto/rea).
