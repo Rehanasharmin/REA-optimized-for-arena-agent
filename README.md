@@ -34,7 +34,7 @@ what an agent actually needs (~3.2k files instead of ~7.2k).
 
 ```bash
 bash scripts/sandbox/bootstrap.sh --check         # is this container ready?
-bash scripts/sandbox/bootstrap.sh                 # provision + build (~30-60 s)
+bash scripts/sandbox/bootstrap.sh                 # provision + build (~40 s)
 bash scripts/sandbox/bootstrap.sh --with-native   # add JDK 25 + Ghidra decompilation
 set -a; . ./.rea-sandbox.env; set +a              # engine paths and host budgets
 

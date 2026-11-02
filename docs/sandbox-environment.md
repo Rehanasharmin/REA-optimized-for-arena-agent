@@ -42,10 +42,10 @@ the container resets. `--json` gives the same state as machine-readable JSON.
 
 Two provisioning profiles:
 
-| Profile                                | Command                      | Installs                                                                                        | Enables                                                                                                       |
-| -------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Default (fast, ~30-60 s warm)          | `bootstrap.sh`               | pinned Node.js, swapfile, binutils/file/zip/procps/sqlite3/tshark/apktool, pwntools venv, build | JavaScript/Electron analysis, every deterministic parser, archive/APK/PCAP inspection, ELF layout and symbols |
-| Native (`--with-native`, minutes cold) | `bootstrap.sh --with-native` | adds full JDK 25 and Ghidra 12.x (~570 MB download)                                             | decompilation, function dossiers, call graphs, cross-references                                               |
+| Profile                                                                               | Command                      | Installs                                                                                        | Enables                                                                                                       |
+| ------------------------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Default (fast, ~30-60 s warm)                                                         | `bootstrap.sh`               | pinned Node.js, swapfile, binutils/file/zip/procps/sqlite3/tshark/apktool, pwntools venv, build | JavaScript/Electron analysis, every deterministic parser, archive/APK/PCAP inspection, ELF layout and symbols |
+| Native (`--with-native`, minutes: one ~570 MB Ghidra download, then cached in `/opt`) | `bootstrap.sh --with-native` | adds full JDK 25 and Ghidra 12.x (~570 MB download)                                             | decompilation, function dossiers, call graphs, cross-references                                               |
 
 Both profiles are idempotent and write only `/opt/rea-engines` and the gitignored
 `.rea-sandbox.env`. Load the exports in each shell before running REA:
