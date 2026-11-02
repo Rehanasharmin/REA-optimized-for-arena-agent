@@ -44,7 +44,7 @@ Two provisioning profiles:
 
 | Profile                                                                               | Command                      | Installs                                                                                        | Enables                                                                                                       |
 | ------------------------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Default (fast, ~30-60 s warm)                                                         | `bootstrap.sh`               | pinned Node.js, swapfile, binutils/file/zip/procps/sqlite3/tshark/apktool, pwntools venv, build | JavaScript/Electron analysis, every deterministic parser, archive/APK/PCAP inspection, ELF layout and symbols |
+| Default (fast: 42 s from a fresh clone on 2 GiB RAM, no swap)                         | `bootstrap.sh`               | pinned Node.js, swapfile, binutils/file/zip/procps/sqlite3/tshark/apktool, pwntools venv, build | JavaScript/Electron analysis, every deterministic parser, archive/APK/PCAP inspection, ELF layout and symbols |
 | Native (`--with-native`, minutes: one ~570 MB Ghidra download, then cached in `/opt`) | `bootstrap.sh --with-native` | adds full JDK 25 and Ghidra 12.x (~570 MB download)                                             | decompilation, function dossiers, call graphs, cross-references                                               |
 
 Both profiles are idempotent and write only `/opt/rea-engines` and the gitignored
@@ -60,7 +60,9 @@ set -a; . ./.rea-sandbox.env; set +a
    ships Node 20 and `package.json#engines` requires `^22.23.4 || ^24.22.1 || >=26.12.1`.
 2. **Swap** — a 2 GiB swapfile when the host has under 4 GiB RAM and no swap.
    Without it `npm ci` is OOM-killed mid-install and looks like a corrupt
-   dependency tree.
+   dependency tree. `swapon` lives in `/sbin` and is not on an unprivileged
+   `PATH`, so the provisioner resolves it explicitly rather than trusting
+   `command -v`.
 3. **JDK 25** — REA's Ghidra readiness check requires a **full 64-bit JDK 25 or
    newer**; the image's `java` is JDK 11 and JDK 21 is also rejected.
 4. **Ghidra** — current public release, resolved from the GitHub API into
@@ -69,7 +71,29 @@ set -a; . ./.rea-sandbox.env; set +a
    `pyelftools 0.33`, `Unicorn 2.1.2`), exported as `REA_PWNTOOLS_PYTHON`, because
    REA never installs Python packages and the system interpreter is PEP 668-managed.
 6. **Build** — `npm ci` with a bounded heap and socket count, then
-   `npm run build:cached`, both capped by `NODE_OPTIONS=--max-old-space-size`.
+   `npm run build:cached`, both capped by `NODE_OPTIONS=--max-old-space-size` and
+   `REA_TS_MAX_MEMORY` (the TypeScript compiler's own heap bound).
+
+### Cold start on a 2 GiB host
+
+Measured from `git clone --depth 1` into a real disk path on 2 vCPU / 1,982 MiB RAM
+with **no swap active** and an empty `node_modules`:
+
+| Step                   | Result                                                              |
+| ---------------------- | ------------------------------------------------------------------- |
+| `bootstrap.sh --check` | `NEEDS PROVISIONING` in 0.1 s (all five rows `missing`)             |
+| `bootstrap.sh`         | `[rea-sandbox] ready` in **42 s**, 11/12 capabilities, 0 failed     |
+| `.rea-sandbox.env`     | `NODE_OPTIONS=--max-old-space-size=2014`, `REA_TS_MAX_MEMORY=2820M` |
+| `bootstrap.sh --check` | `READY` (exit 0), only optional `deep-analysis` missing             |
+
+Budgets are derived from the host, never hard-coded: the Node heap is 50% of
+RAM+swap (floor 512 MiB, cap 4096 MiB) and the compiler bound is 70% (floor
+1024 MiB, cap 3584 MiB, `M` suffix). Override the compiler bound with
+`REA_TS_MAX_MEMORY` if you knowingly have more headroom. If the build still fails
+the provisioner drops page cache and retries once at a 768 MiB heap /
+1024 MiB compiler budget; if that fails too it prints RAM, swap and free disk
+instead of a bare exit code. A workspace with under 2 GiB free gets a warning,
+because some images mount it on a small tmpfs where the compile dies as `ENOSPC`.
 
 ## File budget and slim profile
 

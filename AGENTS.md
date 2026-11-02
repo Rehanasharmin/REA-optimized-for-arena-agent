@@ -28,7 +28,7 @@ of guessing whether the checkout is built.
 ### 2. Provision what is missing
 
 ```bash
-bash scripts/sandbox/bootstrap.sh                 # ~30-60 s: Node, swap, host tools, pwntools venv, build
+bash scripts/sandbox/bootstrap.sh                 # ~42 s: Node, swap, host tools, pwntools venv, build
 bash scripts/sandbox/bootstrap.sh --with-native   # adds JDK 25 + Ghidra (~570 MB) for decompilation
 ```
 

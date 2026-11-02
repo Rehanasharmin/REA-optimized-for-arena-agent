@@ -17,7 +17,7 @@ engine-free analysis still works.
 ## 1. Provision what is missing
 
 ```bash
-bash scripts/sandbox/bootstrap.sh                 # ~30-60 s: Node, host tools, pwntools, build
+bash scripts/sandbox/bootstrap.sh                 # ~42 s: Node, swap, host tools, pwntools, build
 bash scripts/sandbox/bootstrap.sh --with-native   # adds JDK 25 + Ghidra (minutes, ~570 MB)
 ```
 
