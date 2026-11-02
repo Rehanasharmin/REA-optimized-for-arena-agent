@@ -4,157 +4,173 @@ This page describes the **sandbox edition** of REA: the same tool, adapted to ru
 inside a disposable, headless Linux container that an AI agent drives through a
 shell instead of an MCP-registered desktop client.
 
-It records what actually works in such a container (verified by a script, not by
-assumption), what stays unavailable and why, and the resource discipline that
-keeps a 2 vCPU / 2 GiB host from tipping over.
+Everything below is either a machine-checked fact from
+`node scripts/sandbox/verify-sandbox.mjs` or an explicit limit. It is written so an
+agent can bootstrap, verify and investigate without outside help.
 
 > REA is created and maintained by [morluto](https://github.com/morluto) and the
-> REA contributors at [morluto/rea](https://github.com/morluto/rea). This page
-> and the `scripts/sandbox/` helpers are additions of this fork; the analysis
-> engine, tool catalog, Evidence model and workflow skill are upstream work.
-> See [CREDITS.md](../CREDITS.md).
+> REA contributors at [morluto/rea](https://github.com/morluto/rea). The engines,
+> tool catalog, Evidence model and workflow skill are their work. This page and
+> `scripts/sandbox/` are the fork's additions — see [CREDITS.md](../CREDITS.md).
 
 ## Environment profile
 
-The sandbox class this edition targets:
+| Property       | Value                                                                   |
+| -------------- | ----------------------------------------------------------------------- |
+| OS / arch      | Debian 13 (trixie), Linux x86_64                                        |
+| CPU / RAM      | 2 vCPU, ~2 GiB RAM, no swap by default                                  |
+| Display        | none: no X11, no Wayland, no GUI applications                           |
+| Package access | `apt-get`, `pip`, `npm`, passwordless `sudo`                            |
+| Client         | no MCP registration; the CLI is the interface                           |
+| Persistence    | only the workspace; `/opt`, installed packages and `node_modules` reset |
+| Network        | outbound HTTPS available                                                |
 
-| Property       | Value                                                                       |
-| -------------- | --------------------------------------------------------------------------- |
-| OS / arch      | Debian 13 (trixie), Linux x86_64                                            |
-| CPU / RAM      | 2 vCPU, ~2 GiB RAM, no swap by default                                      |
-| Display        | none (no X11, no Wayland, no GUI applications)                              |
-| Package access | `apt-get`, `pip`, `npm` available; passwordless `sudo`                      |
-| Client         | no MCP client registration; the agent runs the CLI through its shell tool   |
-| Persistence    | only the workspace directory persists; `/opt` and installed packages do not |
-| Network        | outbound HTTPS available                                                    |
+The checkout is also **trimmed to fit an agent file budget**: ~3.2k files instead
+of ~7.2k (see [File budget and slim profile](#file-budget-and-slim-profile)).
 
-Those constraints, not REA itself, drive every decision below. In particular:
-analysis engines are not preinstalled, there is no GUI application to attach to,
-and anything written outside the workspace must be re-created per session — which
-is why provisioning is a script rather than a one-time install.
-
-## Provision in one command
+## Bootstrap (one command)
 
 ```bash
-bash scripts/sandbox/provision-sandbox.sh
-set -a; . ./.rea-sandbox.env; set +a
-node scripts/sandbox/verify-sandbox.mjs
+bash scripts/sandbox/bootstrap.sh --check          # instant status, changes nothing
+bash scripts/sandbox/bootstrap.sh                  # provision what is missing + build
+bash scripts/sandbox/bootstrap.sh --with-native    # also install JDK 25 + Ghidra
 ```
 
-The provisioner is idempotent and changes nothing outside `/opt/rea-engines` and
-the gitignored `.rea-sandbox.env`:
+`--check` is free (no npm, no network) and answers "can I analyse something right
+now, and what is missing?" — use it as the first call in every session, because
+the container resets. `--json` gives the same state as machine-readable JSON.
 
-1. **Node.js** — installs the version pinned in `.nvmrc` into `/usr/local` when
-   the image's Node is older (this image ships Node 20; `package.json#engines`
-   requires `^22.23.4 || ^24.22.1 || >=26.12.1`).
-2. **Swap** — adds a 2 GiB swapfile when the host has under 4 GiB RAM and no
-   swap. Without it, `npm ci` is OOM-killed mid-install and looks like a broken
+Two provisioning profiles:
+
+| Profile                                | Command                      | Installs                                                                                        | Enables                                                                                                       |
+| -------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Default (fast, ~30-60 s warm)          | `bootstrap.sh`               | pinned Node.js, swapfile, binutils/file/zip/procps/sqlite3/tshark/apktool, pwntools venv, build | JavaScript/Electron analysis, every deterministic parser, archive/APK/PCAP inspection, ELF layout and symbols |
+| Native (`--with-native`, minutes cold) | `bootstrap.sh --with-native` | adds full JDK 25 and Ghidra 12.x (~570 MB download)                                             | decompilation, function dossiers, call graphs, cross-references                                               |
+
+Both profiles are idempotent and write only `/opt/rea-engines` and the gitignored
+`.rea-sandbox.env`. Load the exports in each shell before running REA:
+
+```bash
+set -a; . ./.rea-sandbox.env; set +a
+```
+
+### Why the provisioner does what it does
+
+1. **Node.js** — the pinned version from `.nvmrc` into `/usr/local`; the base image
+   ships Node 20 and `package.json#engines` requires `^22.23.4 || ^24.22.1 || >=26.12.1`.
+2. **Swap** — a 2 GiB swapfile when the host has under 4 GiB RAM and no swap.
+   Without it `npm ci` is OOM-killed mid-install and looks like a corrupt
    dependency tree.
-3. **JDK 25** — REA's Ghidra readiness check requires a 64-bit **full JDK 25 or
-   newer**. Debian's default `java` is JDK 11 and fails that check; the
-   provisioner installs `openjdk-25-jdk-headless` and repoints the `java`
-   alternative.
-4. **Ghidra** — downloads the current public Ghidra release (12.2 at the time of
-   writing) into `/opt/rea-engines` and exports `GHIDRA_INSTALL_DIR`.
-5. **pwntools stack** — creates `/opt/rea-engines/py` with the exact versions REA
-   admits (`pwntools 4.15.0`, `pyelftools 0.33`, `Unicorn 2.1.2`) and exports
-   `REA_PWNTOOLS_PYTHON`. REA never installs Python packages itself, and the
-   system interpreter is PEP 668-managed, so a dedicated venv is the honest way
-   to satisfy the pin.
-6. **Host tools** — `binutils`, `file`, `zip`/`unzip`, `procps`, `sqlite3`,
-   `tshark`, `apktool`.
-7. **Build** — `npm ci` with a bounded heap and socket count, then
-   `npm run build:cached`.
+3. **JDK 25** — REA's Ghidra readiness check requires a **full 64-bit JDK 25 or
+   newer**; the image's `java` is JDK 11 and JDK 21 is also rejected.
+4. **Ghidra** — current public release, resolved from the GitHub API into
+   `/opt/rea-engines`, exported as `GHIDRA_INSTALL_DIR`.
+5. **pwntools** — a venv with the exact admitted versions (`pwntools 4.15.0`,
+   `pyelftools 0.33`, `Unicorn 2.1.2`), exported as `REA_PWNTOOLS_PYTHON`, because
+   REA never installs Python packages and the system interpreter is PEP 668-managed.
+6. **Build** — `npm ci` with a bounded heap and socket count, then
+   `npm run build:cached`, both capped by `NODE_OPTIONS=--max-old-space-size`.
 
-Useful flags: `--minimal` (Node + build only, ~1 minute), `--no-native` (skip
-Ghidra/JDK/pwntools), `--no-apt`, `--no-build`, `--check` (plan only), `--root`
-(engine directory), `--with-gdb`, `--with-browser`.
+## File budget and slim profile
 
-`npm run sandbox:check` runs the verification subset that works on this host:
-typecheck, module boundaries, documentation facts and the sandbox capability
-report.
+An agent workspace has a file limit (10,000) and a size limit. A full REA
+development checkout spends most of that budget on material that never runs during
+an investigation, so `scripts/sandbox/slim-repo.sh` removes it deterministically:
+
+| Removed                                                                                                     | Files | Why it is safe                                                                |
+| ----------------------------------------------------------------------------------------------------------- | ----- | ----------------------------------------------------------------------------- |
+| `tests/`                                                                                                    | 2,375 | Vitest suites, goldens and fixtures; not imported by `src/`                   |
+| `src/**/*.test.ts`, `*.fixture.ts`                                                                          | 1,187 | Already excluded by `tsconfig.build.json`; nothing in production imports them |
+| `website/`, `docs/readme/`                                                                                  | 121   | Documentation site and 23 translated READMEs                                  |
+| `docs/assets` screenshots, `docs/releases`, `docs/specs`, `docs/design`, `docs/public`, `docs/verification` | ~200  | Regenerable or upstream-canonical; small SVGs used by the README were kept    |
+| `.github/`, `.husky/`, release and lint tooling                                                             | ~80   | CI, hooks, mutation/coverage/knip/jscpd/release-please configs                |
+
+Result: **7,154 → ~3,210 files** (about 33 MB without `.git`, 57 MB with it).
+`src/`, `scripts/`, `bridge/`, `native/`, `third_party/`, `licenses/`, the
+`docs/*.md` guides, the workflow skill and the sandbox tooling are untouched.
+
+```bash
+bash scripts/sandbox/slim-repo.sh --dry-run   # what would go
+bash scripts/sandbox/slim-repo.sh --restore   # bring it back from git
+```
+
+Removing `.git` (24 MB) is safe if you never want the removed material back:
+`rm -rf .git`.
 
 ## What works here (verified)
 
-`node scripts/sandbox/verify-sandbox.mjs` re-derives this table on any host and
-writes `docs/verification/sandbox-capability-report.json`. The run below is from
-the reference sandbox (`13/14` capabilities verified, 0 failed):
+`node scripts/sandbox/verify-sandbox.mjs` re-derives this table on the host and
+writes `docs/sandbox-capability-report.json`. Reference run — **13/14
+capabilities verified, 0 failed**:
 
-| Capability                                                                                                                                   | Status       | Path / requirement                                                                                                      |
-| -------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| CLI, `--version`, `doctor`, `providers`                                                                                                      | works        | no engine needed                                                                                                        |
-| Deterministic parsers (`inspect-byte-entropy`, `inspect-elf-notes`, `inspect-macho`, `inspect-plist`, `inspect-python-pyc`, …)               | works        | pure TypeScript parsers                                                                                                 |
-| Archive/package inventory (`inspect-artifact`, `extract-artifact`, `compare-artifacts`)                                                      | works        | pure TypeScript                                                                                                         |
-| JavaScript / Electron static analysis (`analyze-javascript-application`, `trace-javascript-semantics`, `compare-application-versions`)       | works        | **no engine required** — the fastest path in this environment                                                           |
-| Ghidra deep analysis (`analyze`, `function`, `decompile`, `search`, `xrefs`, `decompile-all`)                                                | works        | Ghidra 12.2 + JDK 25, ~14 s cold import on a small ELF                                                                  |
-| ELF layout, symbols, relocations, mitigations (`inspect-binary-layout`)                                                                      | works        | `REA_PWNTOOLS_PYTHON` venv                                                                                              |
-| GNU objdump inspection (`inspect-with-objdump`, `list-objdump-architectures`)                                                                | works        | `binutils`                                                                                                              |
-| Packet captures (`inspect-pcap-capture`, `inspect-packet-fields`)                                                                            | works        | `tshark` 4.4                                                                                                            |
-| APK resources (`inspect-apktool-client`, `decode-android-resources`, `inspect-android-package` declarations)                                 | works        | `apktool` 2.7.0                                                                                                         |
-| SQLite / firmware-adjacent static parsers (`inspect-sqlite-database`, `inspect-devicetree`, `inspect-erlang-beam`, `inspect-model-artifact`) | works        | Node ≥ 24.15 for SQLite                                                                                                 |
-| Managed (.NET) static inspection (`inspect-managed-artifact`, `inspect-managed-members`)                                                     | works        | pure TypeScript                                                                                                         |
-| WASM inspection (`inspect-wasm-artifact`, `compare-wasm-interfaces`)                                                                         | needs config | requires WABT **1.0.42**; Debian ships 1.0.36, so the provisioner deliberately does not export `REA_WABT_BIN_DIRECTORY` |
+| Capability                                                                                                                                                | Status       | Path / requirement                                                                                                          |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| CLI, `--version`, `doctor`, `providers`                                                                                                                   | works        | no engine needed                                                                                                            |
+| Deterministic parsers (`inspect-byte-entropy`, `inspect-elf-notes`, `inspect-macho`, `inspect-plist`, `inspect-python-pyc`, `inspect-sqlite-database`, …) | works        | pure TypeScript                                                                                                             |
+| Archive/package inventory (`inspect-artifact`, `extract-artifact`, `compare-artifacts`)                                                                   | works        | pure TypeScript                                                                                                             |
+| JavaScript / Electron static analysis (`analyze-javascript-application`, `trace-javascript-semantics`, `compare-application-versions`)                    | works        | no engine required — cheapest useful route                                                                                  |
+| GNU objdump inspection (`inspect-with-objdump`)                                                                                                           | works        | `binutils`                                                                                                                  |
+| ELF layout, symbols, relocations, mitigations (`inspect-binary-layout`)                                                                                   | works        | `REA_PWNTOOLS_PYTHON` venv (default profile)                                                                                |
+| Packet captures (`inspect-pcap-capture`, `inspect-packet-fields`)                                                                                         | works        | `tshark` 4.4                                                                                                                |
+| APK declarations and resources (`inspect-apktool-client`, `inspect-android-package`, `decode-android-resources`)                                          | works        | `apktool` 2.7.0                                                                                                             |
+| Managed (.NET) static inspection                                                                                                                          | works        | pure TypeScript                                                                                                             |
+| Ghidra deep analysis (`analyze`, `function`, `decompile`, `xrefs`, `search`)                                                                              | works        | `--with-native` profile; ~14 s cold import for a small ELF                                                                  |
+| WASM inspection (`inspect-wasm-artifact`)                                                                                                                 | needs config | requires WABT **1.0.42**; the distro build is 1.0.36, so the provisioner deliberately leaves `REA_WABT_BIN_DIRECTORY` unset |
 
 ## What stays unavailable, and why
 
-These are honest limits of the environment, not defects to work around:
+These are limits of the environment, not defects to work around:
 
-| Capability                                                                    | Reason                                                                                                                                                                                          |
-| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hopper provider                                                               | macOS-only application. On Linux REA reports `executable_missing` for `/opt/hopper/bin/Hopper`; the CLI never pretends the provider exists.                                                     |
-| IDA, JEB, Kuna providers                                                      | Commercial tools supplied by the caller (`REA_IDA_MCP_CONFIG`, `REA_JEB_MCP_URL`, `REA_KUNA_COMMAND`). REA grants no license or entitlement.                                                    |
-| JADX-backed Android code (`inspect-android-method`, `search-android-classes`) | Requires a caller-supplied `jadx-headless-mcp` JAR via `REA_JADX_MCP_JAR`. REA does not download it. APK _declarations_ still work through apktool.                                             |
-| ADB device workflows                                                          | No device and no emulator in the container.                                                                                                                                                     |
-| Browser capture (`capture-browser-scenario`, `observe-web-execution`)         | Needs a Chromium build (`--with-browser`) **and** a reachable page; headless captures are possible but heavy for 2 vCPU.                                                                        |
-| Frida / LLDB / native UI runtime observation                                  | No target process to attach to, no macOS AX APIs, and ptrace is unavailable in the sandbox's default seccomp profile.                                                                           |
-| Firmware extraction (`inspect-firmware-regions`, `extract-firmware`)          | Pinned to Binwalk **3.1.x** (Debian ships 2.4.3) or Unblob **26.6.x**. Supply `REA_BINWALK_COMMAND` / `REA_UNBLOB_COMMAND` yourself when needed.                                                |
-| `rea setup` client registration                                               | There is no agent client to configure. The workflow skill is consumed as repository documentation (`AGENTS.md`, `.agents/skills/`), and `doctor` correctly reports `skill:identity` as missing. |
+| Capability                                   | Reason                                                                                                                                       |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hopper provider                              | macOS-only. On Linux REA reports `executable_missing` for `/opt/hopper/bin/Hopper`.                                                          |
+| IDA, JEB, Kuna providers                     | Commercial tools supplied by the caller (`REA_IDA_MCP_CONFIG`, `REA_JEB_MCP_URL`, `REA_KUNA_COMMAND`). REA grants no license or entitlement. |
+| JADX-backed Android code                     | Requires a caller-supplied `jadx-headless-mcp` JAR (`REA_JADX_MCP_JAR`). APK _declarations_ still work through apktool.                      |
+| ADB device workflows                         | No device or emulator in the container.                                                                                                      |
+| Browser capture                              | Needs a Chromium build (`--with-browser`) and a reachable page; heavy for 2 vCPU.                                                            |
+| Frida / LLDB / native UI runtime observation | No target process to attach to, no macOS accessibility APIs, ptrace blocked in the default sandbox profile.                                  |
+| Firmware extraction                          | Pinned to Binwalk **3.1.x** (Debian ships 2.4.3) or Unblob **26.6.x**.                                                                       |
+| `rea setup` client registration              | There is no client to configure; the skill is consumed as repository documentation and `doctor` reports `skill:identity` as missing.         |
 
 ## Resource discipline
 
-The container is small, so the defaults in `.rea-sandbox.env` are deliberately
-conservative:
+| Knob                                   | Value                                | Why                                                    |
+| -------------------------------------- | ------------------------------------ | ------------------------------------------------------ |
+| `NODE_OPTIONS`                         | `--max-old-space-size` ≈ 60 % of RAM | keeps builds inside the cgroup                         |
+| `REA_GHIDRA_STARTUP_TIMEOUT_MS`        | `600000`                             | a cold import that takes minutes is normal, not a hang |
+| `REA_GHIDRA_DECOMPILE_TIMEOUT_SECONDS` | `180`                                | one function cannot own the turn                       |
+| `REA_MCP_MAX_RESPONSE_BYTES`           | `10485760`                           | REA's floor; retained Evidence keeps the full record   |
 
-| Knob                                   | Value                                | Why                                                                                                                 |
-| -------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `NODE_OPTIONS`                         | `--max-old-space-size` ≈ 60 % of RAM | Keeps a TypeScript build inside the cgroup instead of the OOM killer.                                               |
-| `REA_GHIDRA_STARTUP_TIMEOUT_MS`        | `600000`                             | A cold Ghidra import that takes 330 s here is normal on 2 vCPU; the deadline is a _patience_ budget, not a hang.    |
-| `REA_GHIDRA_DECOMPILE_TIMEOUT_SECONDS` | `180`                                | Bounds one function so a single call cannot own the whole turn.                                                     |
-| `REA_MCP_MAX_RESPONSE_BYTES`           | `10485760`                           | REA's floor; keeps oversized payloads out of the agent's context while retained Evidence keeps the complete record. |
-
-Operational rules that matter more than any single knob:
-
-- **One heavy job at a time.** Two concurrent Ghidra imports exhaust RAM. Run
-  native analysis serially; parallelise cheap parsers only.
-- **Never reinstall casually.** `npm ci` re-materialises the tree and needs the
-  swapfile. Prefer `npm run build:cached`, which is cached by Turbo.
-- **Summary first.** Use `--token-count`, `--token-limit`, `--filter-output`,
-  and `--format toon|md` for agent-visible output; keep JSON for the record.
-- **Reuse the session.** `--snapshot <dir>` and retained Evidence avoid paying
-  for the same import twice. `close_binary` / `reset_investigation` are CLI
-  concerns only through `evidence-export`; the one-shot CLI exits on its own.
+- **One heavy job at a time.** Two concurrent Ghidra imports exhaust RAM.
+- **Do not reinstall casually.** Prefer `npm run build:cached`; `npm ci` needs the
+  swapfile.
+- **Price output before reading it.** `--token-count`, `--token-limit`,
+  `--filter-output`, `--format md|toon`; keep JSON for records a later call reads.
+- **Reuse the warm session.** `--snapshot <dir>` and retained Evidence avoid paying
+  for the same import twice; `evidence-export` persists a bundle into the workspace.
 
 ## Troubleshooting ladder
 
-| Observed result                                                                                 | Meaning                                                                                                                                                              | Action                                                                                                                                                                                              |
-| ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `unsupported_version … JDK 25 or newer`                                                         | `JAVA_HOME` points at JDK 11/21                                                                                                                                      | Re-run the provisioner; confirm `JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64`.                                                                                                                     |
-| `GHIDRA_INSTALL_DIR is not set`                                                                 | Engine path missing                                                                                                                                                  | `set -a; . ./.rea-sandbox.env; set +a` in the same shell, or re-provision after the container was reset.                                                                                            |
-| `provider_unavailable` with every candidate rejected                                            | Nothing is configured at all                                                                                                                                         | Read `details.rejections[]`; each entry carries `code`, `reason` and `remediation`. Do not retry the identical call.                                                                                |
-| `Selected Python lacks pwntools 4.15.0`                                                         | `REA_PWNTOOLS_PYTHON` resolves to a different interpreter than the venv                                                                                              | Point it at `/opt/rea-engines/py/bin/python3`.                                                                                                                                                      |
-| `npm ci` exits with `Killed`                                                                    | OOM killer                                                                                                                                                           | Confirm the swapfile is active (`free -m`), then retry with `--maxsockets=6`.                                                                                                                       |
-| `Killed` during `npm run build`                                                                 | Heap above available RAM                                                                                                                                             | Lower `NODE_OPTIONS=--max-old-space-size=1024` and rebuild.                                                                                                                                         |
-| `rea doctor` reports `unhealthy` with `hopper`, `ida-registration`, `jadx`, `kuna-installation` | Expected here                                                                                                                                                        | Those providers are optional and unavailable by design in this container; it is not a broken install.                                                                                               |
-| `Unsupported wasm-validate version banner`                                                      | WABT pin mismatch                                                                                                                                                    | Install WABT 1.0.42 or leave WASM inspection unadvertised.                                                                                                                                          |
-| `oxlint` exits with `Aborted` / `oxc_allocator … fixed_size.rs` panic                           | The bundled `oxlint` 1.87 aborts in this container on any input, even a single file with memory to spare — a toolchain/allocator incompatibility, not a lint finding | Use the working gate instead: `npm run typecheck`, `npm run verify:module-boundaries`, `vitest run <paths>`, the documentation checks and `npm run sandbox:verify`. Lint in CI or on a normal host. |
-| `git commit` fails in the husky pre-commit hook (`oxlint --fix`)                                | The same allocator crash, reached through lint-staged                                                                                                                | Commit with `HUSKY=0 git commit …` and say in the message or PR that lint could not run here. `oxfmt` (formatting) does work and must stay clean.                                                   |
+| Observed result                                                                        | Meaning                                                    | Action                                                                                                                    |
+| -------------------------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `bootstrap.sh --check` says `NEEDS PROVISIONING`                                       | container reset or first use                               | `bash scripts/sandbox/bootstrap.sh`                                                                                       |
+| `unsupported_version … JDK 25 or newer`                                                | `JAVA_HOME` points at JDK 11/21                            | re-run with `--with-native`; confirm `JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64`                                       |
+| `GHIDRA_INSTALL_DIR is not set`                                                        | deep-analysis profile not installed, or exports not loaded | `--with-native`, then `set -a; . ./.rea-sandbox.env; set +a`                                                              |
+| `provider_unavailable` with all candidates rejected                                    | nothing configured for that route                          | read `details.rejections[]` (`code`, `reason`, `remediation`); do not retry unchanged                                     |
+| `Selected Python lacks pwntools 4.15.0`                                                | `REA_PWNTOOLS_PYTHON` points at another interpreter        | point it at `/opt/rea-engines/py/bin/python3`                                                                             |
+| `npm ci` exits with `Killed`                                                           | OOM killer                                                 | confirm swap (`free -m`), retry with `--maxsockets=6`                                                                     |
+| `Killed` during `npm run build`                                                        | heap above available RAM                                   | `NODE_OPTIONS=--max-old-space-size=1024` and rebuild                                                                      |
+| `rea doctor` reports `hopper`, `ida-registration`, `jadx`, `kuna-installation` missing | expected                                                   | optional/caller-supplied integrations; not a broken install                                                               |
+| `Unsupported wasm-validate version banner`                                             | WABT pin mismatch                                          | install WABT 1.0.42 or leave WASM unadvertised                                                                            |
+| `oxlint` aborts (`oxc_allocator … fixed_size.rs`)                                      | bundled lint binary is incompatible with this container    | the slim profile ships no lint gate; use `npm run typecheck`, `npm run verify:module-boundaries`, `npm run sandbox:check` |
 
 ## Contributing back
 
-Anything here that is genuinely general — a better readiness message, an engine
-detection fix, a memory-aware default — belongs upstream at
+Fixes that are genuinely general — readiness messages, engine detection,
+memory-aware defaults, Evidence provenance — belong upstream at
 [morluto/rea](https://github.com/morluto/rea) under
-[CONTRIBUTING.md](../CONTRIBUTING.md). Keep sandbox-specific provisioning and
-prompt adaptations in `scripts/sandbox/`, `docs/sandbox-environment.md`,
-`CREDITS.md` and the environment sections of `AGENTS.md`, so upstream diffs stay
-reviewable.
+[CONTRIBUTING.md](../CONTRIBUTING.md). Restore the development tree first
+(`bash scripts/sandbox/slim-repo.sh --restore`) or clone upstream, so the upstream
+gates can run. Keep sandbox-specific changes in `scripts/sandbox/`,
+`docs/sandbox-environment.md`, `CREDITS.md` and the environment sections of
+`AGENTS.md` and `.agents/skills/`, so upstream diffs stay reviewable.

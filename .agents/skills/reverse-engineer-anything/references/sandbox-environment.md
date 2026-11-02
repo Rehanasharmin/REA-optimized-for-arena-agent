@@ -1,111 +1,95 @@
 # REA in a headless shell sandbox
 
 Read this when REA runs inside a disposable Linux container driven by a shell
-tool: no MCP client, no GUI application, no preinstalled analysis engines, and a
-small memory budget. It tells you what to expect, what to run first, and where to
-stop.
+tool: no MCP client, no GUI, no preinstalled engines, a ~2 GiB memory budget and a
+workspace file limit. It is a runbook: orient, provision, verify, investigate.
 
-A machine-checked copy of this matrix is produced by
-`node scripts/sandbox/verify-sandbox.mjs`; the human-facing guide is
-`docs/sandbox-environment.md` in the repository.
+## 0. Orient (every session, one call)
 
-## Start from the provisioned environment
+```bash
+bash scripts/sandbox/bootstrap.sh --check --json
+```
 
-The sandbox exports its engine paths in `.rea-sandbox.env` at the repository
-root. Source it once per shell before any REA call:
+Cheap and side-effect free. `ready:false` means the container reset or was never
+provisioned. `deep_analysis:false` only means no decompiler is installed;
+engine-free analysis still works.
+
+## 1. Provision what is missing
+
+```bash
+bash scripts/sandbox/bootstrap.sh                 # ~30-60 s: Node, host tools, pwntools, build
+bash scripts/sandbox/bootstrap.sh --with-native   # adds JDK 25 + Ghidra (minutes, ~570 MB)
+```
+
+Then load engine paths and host budgets in every shell:
 
 ```bash
 set -a; . ./.rea-sandbox.env; set +a
 ```
 
-If that file is missing, or `GHIDRA_INSTALL_DIR` points at a directory that no
-longer exists, the container was reset: run
-`bash scripts/sandbox/provision-sandbox.sh` (idempotent, ~1 minute warm, several
-minutes cold) instead of hand-repairing paths.
+Skip the client-registration and `rea setup` recovery ladders in
+[connection and recovery](connection-and-recovery.md): this host has no client to
+register, and `doctor` reporting `hopper`, `ida-registration`, `jadx`,
+`kuna-installation` or `skill:identity` as missing is expected.
 
-Check readiness **once per session**, not per task, and read the result rather
-than treating `unhealthy` as a failure. In this container `doctor` reports
-`hopper`, `ida-registration`, `jadx`, `kuna-installation` and `skill:identity`
-as missing: those are optional, commercial, macOS-only or client-owned
-integrations that cannot exist here. Their absence does not block any recommended
-route below.
-
-## Invoke the CLI, not a client
-
-There is no MCP registration in this environment, so tools are reached through
-the CLI. From a checkout:
+## 2. Verify instead of assuming
 
 ```bash
-node scripts/rea.mjs <command> <absolute-target-path> --json
+node scripts/sandbox/verify-sandbox.mjs --quick   # seconds
 ```
 
-When REA is only available as a package, use `npx -y rea-agents@latest` from a
-trusted directory outside the target project. Always pass absolute target paths,
-and keep the fixtures and outputs you intend to cite inside the workspace so
-they survive the session.
+Each `ok` row is a command that exited 0 with an Evidence record on this host.
+Treat `needs-config` and `unsupported` rows as limits to report, not failures to
+retry.
 
-## Route by what this host can actually do
+## 3. Route by what this host can do
 
-| Target | Route here | Note |
-| --- | --- | --- |
-| Electron/asar, extracted JavaScript, web bundle | `analyze-javascript-application` | Engine-free and the cheapest useful answer; start here for anything JavaScript. |
-| Native ELF/PE/Mach-O, managed .NET, archives | deterministic parser first (`inspect-artifact`, `inspect-elf-notes`, `inspect-pe-imports`, `inspect-with-objdump`, `inspect-managed-artifact`), then Ghidra | Pure parsers answer inventory questions without a 15 s import. |
-| Decompilation, cross-references, function dossiers | `analyze` → `function` / `decompile` / `xrefs` / `search` | Requires `GHIDRA_INSTALL_DIR` and JDK 25 (both provisioned). |
-| ELF layout, symbols, relocations, mitigations | `inspect-binary-layout` | Requires `REA_PWNTOOLS_PYTHON` (provisioned venv). |
-| APK declarations and resources | `inspect-apktool-client`, `inspect-android-package`, `decode-android-resources` | apktool is provisioned. APK *code* needs a caller-supplied JADX JAR and stays unavailable. |
-| Packet captures | `inspect-pcap-capture`, `inspect-web-network-capture` | tshark is provisioned. |
-| Firmware, WASM, Android code, ADB, browsers, Frida, LLDB, Hopper, IDA, JEB, Kuna | **do not start** | Each needs a caller-supplied engine, a device, a browser build or a macOS host. Say so plainly instead of attempting a call that will return `capability_unavailable`. |
+| Target                                                                                                 | Start with                                                | Requires                                                    |
+| ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- | ----------------------------------------------------------- |
+| Electron/asar, extracted JavaScript, web bundle                                                        | `analyze-javascript-application`                          | nothing — cheapest useful route                             |
+| Archives, packages, unknown files                                                                      | `inspect-artifact`, `extract-artifact`                    | nothing                                                     |
+| ELF/PE/Mach-O identity, notes, imports, strings, entropy, managed .NET, SQLite, PCAP, APK declarations | the matching `inspect-*` command                          | nothing                                                     |
+| ELF layout, symbols, relocations, mitigations                                                          | `inspect-binary-layout`                                   | pwntools venv (default profile)                             |
+| Decompilation, call graphs, function dossiers                                                          | `analyze` → `function` / `decompile` / `xrefs` / `search` | `--with-native`                                             |
+| Firmware, WASM, Android code, ADB, browser, Frida, LLDB, Hopper, IDA, JEB, Kuna                        | **do not start**                                          | caller-supplied engine, device, browser build or macOS host |
 
-When several routes exist, prefer the one that costs one call and no engine, and
-escalate only for a question the cheap route explicitly cannot answer.
+Invoke through the CLI with absolute paths:
+`node scripts/rea.mjs <command> /abs/path --json`. From outside a checkout use
+`npx -y rea-agents@latest <command> /abs/path --json` instead.
 
-## Budget the host, not just the tokens
+## 4. Budget the host, not just the tokens
 
-- Run **one** native deep-analysis job at a time. Two concurrent Ghidra imports
-  exhaust a 2 GiB container.
-- Treat `REA_GHIDRA_STARTUP_TIMEOUT_MS` (600 s here) as patience, not as a hang.
-  A cold import of a small binary takes ~15 s; a large one can take minutes.
-- Keep `REA_GHIDRA_DECOMPILE_TIMEOUT_SECONDS` low (180 s) so one pathological
-  function cannot own the turn.
-- Never repeat an identical call after a timeout or `provider_unavailable`.
-  Change the input, resolve the reported configuration, or report the limit.
-- Prefer one warm process over many cold ones: pass `--snapshot <dir>` when you
-  will ask several questions about the same binary.
+- One native deep-analysis job at a time; concurrent Ghidra imports exhaust 2 GiB.
+- `REA_GHIDRA_STARTUP_TIMEOUT_MS=600000` is patience, not a hang. A small ELF
+  imports in ~15 s; a large one takes minutes.
+- Never repeat an identical call after a timeout or `provider_unavailable`. Read
+  `details.rejections[]` and fix the reported configuration, or state the limit.
+- Prefer `--snapshot <dir>` for several questions about the same binary.
+- `--token-count` to price output, `--token-limit` / `--token-offset` to page it,
+  `--filter-output` to keep only the fields the answer needs, `--format md|toon` to
+  read and `--json` for records a later call consumes. Summary first; page retained
+  `parent_evidence_id` views with `inspect-analysis-view`; `evidence-export` when a
+  result must outlive the session.
 
-## Budget the context
+## 5. Keep provenance honest
 
-The CLI is built for this: use it before pasting large results.
+Separate **observation**, **inference** and **unknown**. Cite the Evidence ID, the
+engine and version, and the coverage boundary. Static evidence never implies
+runtime behaviour — in this container there is usually no way to run the target, so
+say "not observed here". When a tool refuses, quote its `code` and `remediation`
+instead of paraphrasing "analysis failed".
 
-- `--token-count` to price a call, `--token-limit` / `--token-offset` to page it.
-- `--filter-output a,b.c` to keep only the fields the answer needs.
-- `--format md` or `toon` for reading, `--json` when a later call consumes the
-  record.
-- Summary first, then retained Evidence: a summary returns `parent_evidence_id`
-  that `inspect-analysis-view` can page. Request `detail: "complete"` only when
-  the full dossier must travel inline.
-- `evidence-export` writes the complete bundle to a workspace path when the
-  answer needs to outlive the session, and gives you a file to cite.
+## 6. Recovery ladder
 
-## Keep provenance honest
-
-Every conclusion separates **observation**, **inference** and **unknown**, and
-cites the Evidence ID, the engine version, and the coverage boundary. Static
-evidence never implies runtime behaviour — in this container there is usually no
-way to run the target at all, so say "not observed here" instead of implying
-you tested it. When a tool refuses (`capability_unavailable`,
-`provider_unavailable`, `unsupported_version`), quote the reported code and
-remediation rather than paraphrasing it into a vague "analysis failed".
-
-## Recovery ladder
-
-1. **Missing engine path** → source `.rea-sandbox.env`; if the path is gone,
-   re-provision.
-2. **`provider_unavailable`** → read `details.rejections[]`; each rejection names
-   `code`, `reason`, `remediation`. Fix that, or state the limit.
-3. **`unsupported_version`** → compare against the pinned requirement in the
-   message (JDK 25+, Ghidra 12.1+, WABT 1.0.42, Binwalk 3.1.x, Unblob 26.6.x)
-   and stop if the container cannot meet it.
-4. **`Killed` from npm/build** → memory, not logic: confirm swap, lower
+1. **`NEEDS PROVISIONING`** → `bash scripts/sandbox/bootstrap.sh` (never hand-edit
+   engine paths).
+2. **Workspace looks incomplete** (no tests, no website, no CI) → expected in the
+   slim profile; `bash scripts/sandbox/slim-repo.sh --restore` restores it from git.
+3. **`provider_unavailable`** → read `details.rejections[]`; fix or report.
+4. **`unsupported_version`** → compare with the pinned requirement (JDK 25+,
+   Ghidra 12.1+, WABT 1.0.42, Binwalk 3.1.x, Unblob 26.6.x) and stop if the host
+   cannot meet it.
+5. **`Killed` from npm/build** → memory, not logic: confirm swap, lower
    `NODE_OPTIONS=--max-old-space-size`, retry once.
-5. **Empty or truncated client output** → use the retained `parent_evidence_id`
-   or `evidence-export`; do not re-run the producer.
+6. **Truncated client output** → use the retained `parent_evidence_id` or
+   `evidence-export`; do not re-run the producer.

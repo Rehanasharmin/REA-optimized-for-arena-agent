@@ -2,7 +2,7 @@
 name: reverse-engineer-anything
 description: Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA, and build agent environments (AgentEnv bundles) of web applications from a live instance or a capture. Use shipped-artifact or requested runtime evidence to explain features, compare versions, decompile code, or guide a reconstruction. Skip REA for ordinary source-repository architecture analysis.
 metadata:
-  version: "60"
+  version: "61"
 ---
 
 # REA
@@ -15,23 +15,30 @@ readiness or provider commands.
 
 ## Headless shell sandbox
 
-When REA runs in a disposable container or CI box driven by a shell tool — no
-MCP client, no GUI application, no preinstalled engines — read
-[sandbox environment](references/sandbox-environment.md) before the first call
-and follow it for routing. The essentials:
+When REA runs in a disposable container or CI box driven by a shell tool — no MCP
+client, no GUI, no preinstalled engines, a small memory budget — read
+[sandbox environment](references/sandbox-environment.md) and follow its runbook.
+The essentials:
 
-- Source the provisioned exports (`set -a; . ./.rea-sandbox.env; set +a`) and
-  invoke the CLI directly (`node scripts/rea.mjs <command> --json`); there is no
-  registration to repair in such a host, so skip the client-recovery ladders.
-- Prefer the engine-free routes (JavaScript/Electron analysis, deterministic
-  format parsers and archive inventory) and escalate to Ghidra only for a
-  question those cannot answer. Run one native deep-analysis job at a time.
-- Treat an unavailable provider as a stated limit, not a failure to retry:
-  Hopper is macOS-only, and IDA, JEB, Kuna, JADX, ADB, browsers, Frida, LLDB and
-  firmware tooling all require caller-supplied software or hardware.
-- Price output before printing it (`--token-count`, `--token-limit`,
+- **Orient and provision before analysing:** `bash scripts/sandbox/bootstrap.sh
+  --check` (cheap status), then `bash scripts/sandbox/bootstrap.sh` for the fast
+  profile, `--with-native` only when decompilation is required. Load the exports
+  (`set -a; . ./.rea-sandbox.env; set +a`) and drive the CLI directly
+  (`node scripts/rea.mjs <command> /abs/path --json`). This host has no MCP client,
+  so skip the registration and `rea setup` recovery ladders.
+- **Prefer the engine-free routes** (JavaScript/Electron analysis, deterministic
+  format parsers, archive inventory, APK declarations) and escalate to Ghidra,
+  pwntools or objdump only for a question those cannot answer. Run one native
+  deep-analysis job at a time.
+- **Treat an unavailable provider as a stated limit, not a failure to retry:**
+  Hopper is macOS-only, and IDA, JEB, Kuna, JADX, ADB, browsers, Frida, LLDB,
+  firmware and WASM tooling all require caller-supplied software or hardware.
+- **Price output before printing it** (`--token-count`, `--token-limit`,
   `--filter-output`), keep summary-first Evidence, and export a bundle when the
   result must outlive the session.
+- **Expect a slim checkout:** test suites, the documentation website, CI and the
+  translated READMEs are not shipped, to stay inside the workspace file budget.
+  `bash scripts/sandbox/slim-repo.sh --restore` brings them back from git.
 
 ## Connect only when needed
 

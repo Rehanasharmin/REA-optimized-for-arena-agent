@@ -1,8 +1,5 @@
 <div align="center">
 
-**English** · [简体中文](docs/readme/README_zh.md) · [繁體中文](docs/readme/README_zh-TW.md) · [日本語](docs/readme/README_ja.md) · [한국어](docs/readme/README_ko.md) · [Türkçe](docs/readme/README_tr.md) · [Русский](docs/readme/README_ru.md) · [Tiếng Việt](docs/readme/README_vi.md) · [ไทย](docs/readme/README_th.md) · [Deutsch](docs/readme/README_de.md) · [Español](docs/readme/README_es.md) · [Français](docs/readme/README_fr.md) · [Українська](docs/readme/README_uk.md) · [Polski](docs/readme/README_pl.md) · [Português (Brasil)](docs/readme/README_pt-BR.md) · [العربية](docs/readme/README_ar.md) · [فارسی](docs/readme/README_fa.md) · [Bahasa Indonesia](docs/readme/README_id.md) · [Italiano](docs/readme/README_it.md)
-· [Ελληνικά](docs/readme/README_el.md) · [മലയാളം](docs/readme/README_ml.md) · [Roman Urdu](docs/readme/README_ur-Latn.md) · [Română](docs/readme/README_ro.md)
-
 # REA: Reverse Engineer Anything
 
 ### One MCP for reverse engineering across binaries, applications, and runtime behavior.
@@ -26,17 +23,34 @@
 
 </div>
 
-> **This is the sandbox-adapted fork.** Upstream REA is created and maintained by
-> [morluto](https://github.com/morluto) and the REA contributors at
-> [morluto/rea](https://github.com/morluto/rea). The analysis engines, tool
-> catalog, Evidence model, workflow skill and the original README are their work.
-> This fork adds a headless-container profile — a provisioner, a capability
-> verifier and environment-tuned agent guidance — so the same CLI works inside a
-> disposable agent sandbox without a GUI, a desktop client or preinstalled
-> engines. Read the [sandbox guide](docs/sandbox-environment.md) and
-> [credits](CREDITS.md) first. Provision with
-> `bash scripts/sandbox/provision-sandbox.sh`, verify with
-> `node scripts/sandbox/verify-sandbox.mjs`.
+## Sandbox edition: start here
+
+Upstream REA is created and maintained by [morluto](https://github.com/morluto)
+and the REA contributors at [morluto/rea](https://github.com/morluto/rea). The
+analysis engines, CLI/MCP tool catalog, Evidence model, workflow skill and most of
+this README are their work — see [CREDITS.md](CREDITS.md). This fork only adapts
+REA to run inside a disposable, headless agent sandbox, and trims the checkout to
+what an agent actually needs (~3.2k files instead of ~7.2k).
+
+```bash
+bash scripts/sandbox/bootstrap.sh --check         # is this container ready?
+bash scripts/sandbox/bootstrap.sh                 # provision + build (~30-60 s)
+bash scripts/sandbox/bootstrap.sh --with-native   # add JDK 25 + Ghidra decompilation
+set -a; . ./.rea-sandbox.env; set +a              # engine paths and host budgets
+
+node scripts/sandbox/verify-sandbox.mjs --quick            # prove what works here
+node scripts/rea.mjs analyze-javascript-application /abs/path/to/app --json
+node scripts/rea.mjs analyze /abs/path/to/binary --json    # needs --with-native
+```
+
+Everything above is idempotent, writes only `/opt/rea-engines` plus the gitignored
+`.rea-sandbox.env`, and needs no MCP client: this host drives REA through the CLI.
+Agents should read [AGENTS.md](AGENTS.md) first — it is the runbook — then
+[docs/sandbox-environment.md](docs/sandbox-environment.md) for the verified
+capability matrix, honest limits (Hopper, IDA, JEB, JADX, ADB, browsers, Frida,
+firmware, WASM) and the troubleshooting ladder. Development material that was
+removed for the file budget can be restored with
+`bash scripts/sandbox/slim-repo.sh --restore`.
 
 > [!IMPORTANT]
 > Get REA from [morluto/rea](https://github.com/morluto/rea),
@@ -48,7 +62,7 @@
 
 <br />
 
-<img src="docs/assets/rea-hopper-analysis.png" alt="REA launching its analysis bridge inside Hopper while inspecting a native binary" width="1200" />
+<sub>REA drives Ghidra headless (and Hopper, IDA, JEB or Kuna when you supply them) and returns code, references and unknowns with Evidence.</sub>
 
 <br /><br />
 
@@ -190,9 +204,9 @@ REA returns findings with their evidence. The agent uses them to ask follow-up
 questions, explain the behavior, or write and test an implementation.
 CLI commands use the same workflows.
 
-![REA investigation flow: your agent asks about a local target, REA inspects and traces it using analysis tools, and the agent uses the returned code, references and unknowns to explain, implement and test.](website/public/assets/figures/rea-investigation-flow.svg)
+![REA investigation flow: your agent asks about a local target, REA inspects and traces it using analysis tools, and the agent uses the returned code, references and unknowns to explain, implement and test.](docs/assets/rea-investigation-flow.svg)
 
-[Open the full-size figure](website/public/assets/figures/rea-investigation-flow.svg).
+[Open the full-size figure](docs/assets/rea-investigation-flow.svg).
 
 <a id="current-status"></a>
 

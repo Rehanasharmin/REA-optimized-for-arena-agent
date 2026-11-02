@@ -50,21 +50,34 @@ user. REA grants no license, key or entitlement for them.
 
 ## Changes in this fork
 
-This fork is an environment adaptation, not a reimplementation. Its additions:
+This fork is an environment adaptation, not a reimplementation.
 
-| Path                                        | Purpose                                                                                                                         |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `scripts/sandbox/provision-sandbox.sh`      | Idempotent provisioning of Node.js, JDK 25, Ghidra, the pwntools venv, host tools and swap for a headless Linux container.      |
-| `scripts/sandbox/verify-sandbox.mjs`        | Re-derives a capability matrix on the host and writes `docs/verification/sandbox-capability-report.json`.                       |
-| `docs/sandbox-environment.md`               | Environment profile, verified matrix, limits, resource discipline, troubleshooting ladder.                                      |
-| `AGENTS.md` (leading section)               | Sandbox operating rules for agents, ahead of the unchanged upstream guidelines.                                                 |
-| `.agents/skills/reverse-engineer-anything/` | Environment profile section, a `references/sandbox-environment.md` routing sheet, and a skill version bump so installs refresh. |
-| `README.md` and its translations            | A fork notice with attribution; no other upstream README content changed.                                                       |
-| `.rea-sandbox.env` (generated, gitignored)  | Machine-specific engine paths and budget knobs for the current container.                                                       |
+| Path                                        | Purpose                                                                                                                                          |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scripts/sandbox/bootstrap.sh`              | One-command entry point: instant status (`--check`, `--json`), then provision only what is missing and verify.                                   |
+| `scripts/sandbox/provision-sandbox.sh`      | Idempotent provisioning of Node.js, a swapfile, host tools and the pwntools venv (default profile), plus JDK 25 and Ghidra with `--with-native`. |
+| `scripts/sandbox/verify-sandbox.mjs`        | Re-derives a capability matrix on the host and writes `docs/sandbox-capability-report.json`.                                                     |
+| `scripts/sandbox/slim-repo.sh`              | Deterministically trims the checkout to an agent file budget (~7.2k to ~3.2k files) and restores it from git on demand.                          |
+| `docs/sandbox-environment.md`               | Environment profile, verified matrix, limits, file budget, resource discipline, troubleshooting ladder.                                          |
+| `AGENTS.md` (leading sections)              | The agent runbook: orient, provision, verify, route, budget. Upstream guidelines follow unchanged.                                               |
+| `.agents/skills/reverse-engineer-anything/` | Sandbox section, a `references/sandbox-environment.md` runbook, and skill version bumps so installs refresh.                                     |
+| `README.md`                                 | A sandbox quickstart and attribution block; the rest is upstream text with links to removed files repaired.                                      |
+| `.rea-sandbox.env` (generated, gitignored)  | Machine-specific engine paths and budget knobs for the current container.                                                                        |
 
-Upstream files are otherwise untouched, so `git diff --stat upstream/main`
-shows exactly what this fork adds. Fixes that are generally useful should be
-offered upstream under [CONTRIBUTING.md](CONTRIBUTING.md).
+**Removed material.** `scripts/sandbox/slim-repo.sh` deletes what never runs during
+an investigation, to stay inside an agent workspace file budget: the Vitest suites
+and goldens (`tests/`, `src/**/*.test.ts`), the documentation website, the
+translated READMEs, `.github` CI, the changelog, and the
+lint/mutation/coverage/release tooling. Those are upstream _test and release_
+artifacts, not upstream features — no analysis capability was removed. Run
+`bash scripts/sandbox/slim-repo.sh --restore` (git-backed) or clone
+[morluto/rea](https://github.com/morluto/rea) to get them back before contributing
+upstream.
+
+Upstream source and contracts are otherwise untouched, so diffing this tree against
+the upstream commit shows exactly what the fork adds and what it trims. Fixes that
+are generally useful should be offered upstream under
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Attribution in derived work
 

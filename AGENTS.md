@@ -1,74 +1,117 @@
 # Repository Guidelines
 
-## Sandbox environment profile
+## Start here: lean, sandbox-ready REA
 
 REA is created and maintained by [morluto](https://github.com/morluto) and the
 REA contributors at [morluto/rea](https://github.com/morluto/rea) under the MIT
-license. This fork adds a headless-sandbox profile on top of upstream: a
-provisioner, a capability verifier, an environment guide and the agent guidance
-in this section. The analysis engines, tool catalog, Evidence model and workflow
-skill are upstream work; see [CREDITS.md](CREDITS.md) before changing either
-side. Upstream rules in the sections below still apply unless this section says
-otherwise for this host.
+license. This checkout is their work in a **slim, headless-sandbox profile**:
+~3.2k files instead of ~7.2k, so it fits an agent workspace budget (10k files).
+Development-only material (test suites, the documentation website, CI, release
+and lint tooling, translated READMEs) was removed by
+`scripts/sandbox/slim-repo.sh`. Nothing that runs during an investigation was
+removed: `src/`, `scripts/`, `bridge/`, the `docs/*.md` guides, the workflow
+skill and the sandbox tooling are all present. Restore anything with
+`bash scripts/sandbox/slim-repo.sh --restore`, or clone
+[morluto/rea](https://github.com/morluto/rea) for full fidelity. Provenance and
+third-party terms: [CREDITS.md](CREDITS.md).
 
-**Host facts.** Assume a disposable Linux x86_64 container: ~2 vCPU, ~2 GiB RAM,
-no swap until provisioned, no display and no GUI applications, outbound HTTPS
-available, passwordless `sudo` available, and only the workspace directory
-persisting between sessions. Engines, JDK, and Python packages are therefore
-installed by script each session, never assumed.
+### 1. Orient in one call
 
-**Bootstrap and readiness.** Source the provisioned exports before any REA call
-(`set -a; . ./.rea-sandbox.env; set +a`). Re-provision with
-`bash scripts/sandbox/provision-sandbox.sh` (idempotent) rather than repairing
-paths by hand. Verify with `node scripts/sandbox/verify-sandbox.mjs`, which
-re-derives the capability matrix on the host and writes
-`docs/verification/sandbox-capability-report.json`. Read
-[docs/sandbox-environment.md](docs/sandbox-environment.md) before changing either
-script.
+```bash
+bash scripts/sandbox/bootstrap.sh --check        # add --json for machine reading
+```
 
-`rea doctor` reporting `hopper`, `ida-registration`, `jadx`, `kuna-installation`
-or `skill:identity` as missing is expected here: those providers are macOS-only,
-commercial, caller-supplied or client-owned, and there is no MCP client to
-register against. Do not treat that output as a broken installation, and do not
-run `rea setup` to "fix" it.
+Cheap and side-effect free (no npm, no network). It prints `READY` or
+`NEEDS PROVISIONING` plus exactly which rows are missing. Run this first instead
+of guessing whether the checkout is built.
 
-**Route by what the host can do.** Prefer the routes that need no engine:
-JavaScript/Electron and web-bundle analysis, deterministic format parsers,
-archive inventory and APK declarations. Escalate to Ghidra (provisioned, with
-JDK 25) only for questions those parsers cannot answer. Do not start a workflow
-that needs a device (ADB), a browser build, Frida/LLDB attachment, Hopper, IDA,
-JEB, Kuna, a caller-supplied JADX JAR, Binwalk 3.1.x, Unblob 26.6.x or WABT
-1.0.42 unless the caller supplies it. Report the limit with the tool's own
-`code` and `remediation` instead of attempting a call that must refuse.
+### 2. Provision what is missing
 
-**Budget the host.** Run one native deep-analysis job at a time; concurrent
-Ghidra imports exhaust the container. Treat `REA_GHIDRA_STARTUP_TIMEOUT_MS`
-(600 s here) as patience rather than a hang, keep per-call decompile deadlines
-bounded, and never retry an identical call after a timeout or
-`provider_unavailable` — change the input, resolve the reported configuration, or
-stop and state the limit. `npm ci` re-materializes the whole tree and needs the
-provisioned swapfile; prefer `npm run build:cached`, and cap the build heap with
-`NODE_OPTIONS=--max-old-space-size` when memory is tight.
+```bash
+bash scripts/sandbox/bootstrap.sh                 # ~30-60 s: Node, swap, host tools, pwntools venv, build
+bash scripts/sandbox/bootstrap.sh --with-native   # adds JDK 25 + Ghidra (~570 MB) for decompilation
+```
 
-**Budget the context.** This host answers through the CLI, so use its output
-controls before pasting results into a conversation: `--token-count`,
-`--token-limit`, `--token-offset`, `--filter-output`, `--format md|toon` for
-reading and `--json` for records that later calls consume. Keep summary-first
-Evidence, page retained `parent_evidence_id` views with
-`inspect-analysis-view`, and use `evidence-export` when a result must outlive
-the session.
+Both are idempotent and write only `/opt/rea-engines` and the gitignored
+`.rea-sandbox.env`. Then load the exports in every shell:
 
-**Keep sandbox changes separable.** Sandbox-specific work belongs in
-`scripts/sandbox/`, `docs/sandbox-environment.md`, `CREDITS.md`, the leading
-section of this file and the environment sections of
-`.agents/skills/reverse-engineer-anything/` (including
-`references/sandbox-environment.md`). Never commit `.rea-sandbox.env`,
-provisioned engine directories, or machine-specific paths, so upstream diffs stay
-reviewable and the sandbox layer stays droppable. Fixes that are genuinely
-general — readiness messages, engine detection, memory-aware defaults, evidence
-provenance — should be offered upstream at
-[morluto/rea](https://github.com/morluto/rea) under
-[CONTRIBUTING.md](CONTRIBUTING.md).
+```bash
+set -a; . ./.rea-sandbox.env; set +a
+```
+
+Containers reset between sessions: if `bootstrap.sh --check` fails, re-run
+`bootstrap.sh` before anything else.
+
+### 3. Verify instead of assuming
+
+```bash
+node scripts/sandbox/verify-sandbox.mjs --quick        # seconds
+node scripts/sandbox/verify-sandbox.mjs --json docs/sandbox-capability-report.json
+```
+
+Each `ok` row is a command that exited 0 with an Evidence record on _this_ host.
+`needs-config` and `unsupported` rows are limits to report, not failures to
+retry.
+
+### 4. Investigate
+
+| Target                                                                                                 | Start with                                                | Requires                             |
+| ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- | ------------------------------------ |
+| Electron/asar, extracted JavaScript, web bundle                                                        | `analyze-javascript-application`                          | nothing                              |
+| Archives, packages, unknown files                                                                      | `inspect-artifact`, `extract-artifact`                    | nothing                              |
+| ELF/PE/Mach-O identity, notes, imports, strings, entropy, managed .NET, SQLite, PCAP, APK declarations | the matching `inspect-*` command                          | nothing (apktool/tshark provisioned) |
+| ELF layout, symbols, relocations, mitigations                                                          | `inspect-binary-layout`                                   | pwntools venv (default profile)      |
+| Decompilation, call graphs, function dossiers                                                          | `analyze` → `function` / `decompile` / `xrefs` / `search` | `--with-native`                      |
+
+Prefer the cheapest route that answers the question, and escalate only for a
+question the cheap route cannot answer. Everything is available through the CLI
+(`node scripts/rea.mjs <command> <absolute-path> --json`); this host has no MCP
+client to register against, so skip the client-recovery ladders in
+`references/connection-and-recovery.md`.
+
+### Host facts and budgets
+
+Disposable Linux x86_64 container: ~2 vCPU, ~2 GiB RAM, no display, no GUI
+applications, outbound HTTPS, passwordless `sudo`, only the workspace persists.
+Engines, JDK and Python packages are installed by script, never assumed.
+
+- Run **one** native deep-analysis job at a time; concurrent Ghidra imports
+  exhaust the container.
+- `REA_GHIDRA_STARTUP_TIMEOUT_MS=600000` is patience, not a hang: a small ELF
+  imports in ~15 s, a large one takes minutes. Keep per-call decompile deadlines
+  bounded (`.rea-sandbox.env` sets 180 s).
+- Never repeat an identical call after a timeout or `provider_unavailable`.
+  Read `details.rejections[]` (`code`, `reason`, `remediation`), fix that, or
+  state the limit.
+- Cap memory explicitly: `NODE_OPTIONS=--max-old-space-size=<MiB>`. `npm ci`
+  needs the provisioned swapfile; prefer `npm run build:cached` in a warm tree.
+- Price output before reading it: `--token-count`, `--token-limit`,
+  `--token-offset`, `--filter-output`, `--format md|toon` for reading, `--json`
+  for records a later call consumes. Keep summary-first Evidence, page retained
+  `parent_evidence_id` views with `inspect-analysis-view`, and use
+  `evidence-export` when a result must outlive the session.
+- `rea doctor` reporting `hopper`, `ida-registration`, `jadx`, `kuna-installation`
+  or `skill:identity` as missing is expected here — macOS-only, commercial,
+  caller-supplied or client-owned integrations. Do not run `rea setup` to fix it.
+
+### Do not attempt without caller-supplied software
+
+Hopper (macOS-only), IDA, JEB, Kuna, JADX-based Android code, ADB devices,
+browser scenarios (Chromium is not installed), Frida/LLDB attachment, native UI
+observation, firmware tooling (Binwalk 3.1.x / Unblob 26.6.x) and WASM inspection
+(WABT 1.0.42). Report the tool's own `code` and `remediation` rather than
+attempting a call that must refuse; [docs/sandbox-environment.md](docs/sandbox-environment.md)
+explains each limit.
+
+### Keep sandbox work separable
+
+Sandbox-specific changes belong in `scripts/sandbox/`, `docs/sandbox-environment.md`,
+`docs/sandbox-capability-report.json`, `CREDITS.md`, this leading section, and the
+environment sections of `.agents/skills/reverse-engineer-anything/`. Never commit
+`.rea-sandbox.env`, provisioned engine directories or machine-specific paths.
+Fixes that are generally useful — readiness messages, engine detection,
+memory-aware defaults, evidence provenance — belong upstream at
+[morluto/rea](https://github.com/morluto/rea) under [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Product and Authority
 
@@ -136,38 +179,41 @@ token usage, elapsed time, CPU time and peak process-family memory. Separate col
 and warm runs, label estimates, and state unmeasured costs. Fewer bytes alone
 do not establish fewer tokens or faster analysis.
 
-## Development
+## Development in this slim tree
 
-Use [.nvmrc](.nvmrc) and `package.json#packageManager` for the pinned toolchain. Cursor Cloud may place older Node.js first on `PATH`; environment setup installs the pinned toolchain under `/usr/local/bin`. Prefix `PATH="/usr/local/bin:$PATH"` before `node` and `npm`.
+Use [.nvmrc](.nvmrc) and `package.json#packageManager` for the pinned toolchain,
+and keep `/usr/local/bin` first on `PATH` (`export PATH="/usr/local/bin:$PATH"`).
 
-- `npm ci`: install locked dependencies.
-- `npm run build:cached`: build the runtime and packaged skill.
-- `npm run test:local -- PATH...`: source tests without building.
-- `npm run test:focused -- PATH...`: exact tests with their required artifacts.
-- `npm run check:fast`: cached typecheck/lint and the pre-push check.
-- `npm run docs:check`: validate generated documentation.
-- `npm run sandbox:provision`: provision this headless container (Node, JDK 25,
-  Ghidra, pwntools, host tools) and build; idempotent.
-- `npm run sandbox:verify`: re-derive the capability matrix for this host and
-  write the report to `docs/verification/sandbox-capability-report.json`.
-- `npm run sandbox:check`: the verification subset that works here (typecheck,
-  module boundaries, documentation facts, capability report).
+- `npm ci` — install locked dependencies (keep optional dependencies; `--omit=optional`
+  breaks the compile step because `@tsrs/linux-x64-gnu` is optional).
+- `npm run build:cached` — build the runtime and packaged skill (Turbo-cached).
+- `npm run typecheck` — TypeScript gate; works here and is the primary signal.
+- `npm run verify:module-boundaries` — architecture guard over `src/`.
+- `npm run format` / `npm run format:check` — `oxfmt`; keep the tree formatted.
+- `npm run sandbox:check` — typecheck + boundaries + capability report in one pass.
+- `npm run sandbox:bootstrap` — provision and verify from a bare container.
+- `npm run sandbox:slim` — re-apply (or `--restore`) the slim profile.
 
-`npm run lint` does not work in this container: the bundled `oxlint` aborts with
-an `oxc_allocator` panic on any input, including a single file. That is a
-toolchain incompatibility, not a finding. Do not "fix" it by editing lint
-configuration or source; rely on `npm run typecheck`, `npm run
-verify:module-boundaries`, targeted `vitest run`, and the documentation checks,
-and note in the PR that lint was unavailable rather than claiming it passed.
+**What this profile removed.** `scripts/sandbox/slim-repo.sh` deleted the test
+suites (`tests/`, `src/**/*.test.ts`), the documentation website, `.github` CI,
+the translated READMEs, the changelog, and the lint/mutation/release tooling, to
+fit an agent workspace file budget. Consequences:
 
-Use relevant checks for the change. The complete local gate, `npm run check:pr`, is optional for broad changes or CI diagnosis. See [CONTRIBUTING.md](CONTRIBUTING.md) for development, generated-file ownership, and release conventions.
+- `npm test`, `npm run check:pr`, `npm run lint`, `npm run docs:check` and the
+  husky pre-commit hook are gone with their inputs. Do not present them as run
+  or as passing; state that the profile cannot run them.
+- `oxlint` additionally aborts in this container on any input (an
+  `oxc_allocator` panic), so even a restored tree cannot lint here.
+- To work on upstream-facing changes, restore first
+  (`bash scripts/sandbox/slim-repo.sh --restore`) or clone
+  [morluto/rea](https://github.com/morluto/rea), then use [CONTRIBUTING.md](CONTRIBUTING.md)
+  and the gates it describes.
 
-When changing installers or setup recovery, follow
-[Checking installers and publisher downloads](docs/testing.md#checking-installers-and-publisher-downloads).
-
-Coordinate expensive checks across agents. If a test unexpectedly consumes heavy CPU, stop its owned process family and profile a bounded representative case before retrying. Inspect production work, fixture generation, subprocesses, and repeated setup; preserve regression coverage when optimizing. Follow the [test resource guidance](docs/testing.md#developer-commands).
-
-`docs/public/product-catalog.json`, `docs/verification/managed-conformance-*.json`, and `skills/` are ignored outputs. Edit source contracts and `.agents/skills/reverse-engineer-anything/`, then regenerate as needed. `.cache/mcp-tool-catalog.json` is test metadata; runtime builds and source checking do not consume it. Never commit binaries, provider project documents, credentials, `dist/`, `node_modules/`, or local planning artifacts.
+`docs/public/product-catalog.json`, `docs/verification/managed-conformance-*.json`
+and `skills/` are generated outputs; edit source contracts and
+`.agents/skills/reverse-engineer-anything/`, then regenerate. Never commit
+binaries, provider project documents, credentials, `dist/`, `node_modules/`,
+`.rea-sandbox.env` or local planning artifacts.
 
 ## Tool and Test Changes
 
