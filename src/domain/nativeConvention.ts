@@ -1,3 +1,5 @@
+import { compareUnicodeCodePoints } from "./unicodeCodePointOrder.js";
+
 /** Path-segment conventions. These are inferences, not observations of runtime behavior. */
 
 export type NativeRuntimeConvention = "react-native" | "flutter" | "unity";
@@ -12,8 +14,56 @@ const REACT_NATIVE_SEGMENTS = new Set([
   "libreactnativejni.so",
   "libhermes_executor.so",
   "libhermes.so",
+  "libhermesvm.so",
+  "librninstance.so",
+  "libturbomodulejsijni.so",
+  "libfabricjni.so",
+  "libreact_featureflagsjni.so",
   "hermes.framework",
+  "hermesvm.framework",
 ]);
+
+/**
+ * Android React Native and Hermes bundle conventions (`assets/*.bundle`,
+ * `*.jsbundle`, `*.hbc`) not covered by generic UTF-8 JS source suffixes.
+ */
+export const isAndroidJavaScriptBundlePath = (path: string): boolean =>
+  /\.(?:jsbundle|hbc)$/iu.test(path) ||
+  /(?:^|\/)assets\/(?:.+\/)?[^/]+\.bundle$/iu.test(path);
+
+/**
+ * Apple React Native and Hermes bundle file conventions (`*.jsbundle`, `*.hbc`).
+ * Generic `*.bundle` is excluded because Apple CFBundle plugin directories use `.bundle`.
+ */
+export const isAppleJavaScriptBundlePath = (path: string): boolean =>
+  /\.(?:jsbundle|hbc)$/iu.test(path);
+
+/** HarmonyOS JavaScript, React Native (RNOH), and Hermes bundle file conventions. */
+export const isHarmonyJavaScriptBundlePath = (path: string): boolean =>
+  /\.(?:m?js|cjs|jsbundle|hbc)$/iu.test(path) ||
+  /(?:^|\/)assets\/(?:.+\/)?[^/]+\.bundle$/iu.test(path);
+
+/**
+ * Unambiguous React Native / Hermes bundle filenames that indicate React Native
+ * even when native libraries are packaged in a separate split APK/HSP.
+ */
+export const isReactNativeBundleConventionPath = (path: string): boolean =>
+  /\.(?:jsbundle|hbc)$/iu.test(path) ||
+  /(?:^|\/)assets\/(?:.+\/)?index\.android\.bundle$/iu.test(path) ||
+  /(?:^|\/)bundle\.harmony\.(?:js|hbc)$/iu.test(path);
+
+/** Deduplicate path-bearing components in canonical Unicode code-point order. */
+export const uniqueComponentsByPath = <T extends { readonly path: string }>(
+  items: readonly T[],
+): T[] => {
+  const byPath = new Map<string, T>();
+  for (const item of items) {
+    if (!byPath.has(item.path)) byPath.set(item.path, item);
+  }
+  return [...byPath.values()].sort((left, right) =>
+    compareUnicodeCodePoints(left.path, right.path),
+  );
+};
 const FLUTTER_SEGMENTS = new Set(["libflutter.so", "flutter.framework"]);
 const UNITY_SEGMENTS = new Set(["libunity.so", "unityframework.framework"]);
 const DESKTOP_IL2CPP_LIBRARIES = new Set([

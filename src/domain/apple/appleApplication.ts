@@ -12,6 +12,8 @@ import {
   platformsOf,
 } from "./appleBundleAnatomy.js";
 import {
+  isAppleJavaScriptBundlePath,
+  isReactNativeBundleConventionPath,
   isSwiftRuntimeLibrary,
   nativeRuntimeConvention,
 } from "../nativeConvention.js";
@@ -133,7 +135,7 @@ export const projectAppleInventory = (
     rootFormat,
   );
   const classified = classifyComponents(entries, all, roots, bundles);
-  const runtimeFamilies = identifyRuntimeFamilies(all);
+  const runtimeFamilies = identifyRuntimeFamilies(all, classified);
   const bridgeProjection = identifyBridgeCandidates(
     classified.javascript,
     uniqueSortedBy(
@@ -293,7 +295,10 @@ const classifyComponents = (
       frameworkRoots.some((root) => isWithin(path, root)),
     ),
     native_libraries: all.filter(({ path }) => isNativeLibrary(path)),
-    javascript: all.filter(({ format }) => format === "javascript-bundle"),
+    javascript: all.filter(
+      ({ path, format }) =>
+        format === "javascript-bundle" || isAppleJavaScriptBundlePath(path),
+    ),
     signing: all.filter(
       ({ path }) =>
         anatomyTailMatches(path, ["_CodeSignature", "CodeResources"]) ||
@@ -315,7 +320,10 @@ const classifyComponents = (
   };
 };
 
-const identifyRuntimeFamilies = (all: readonly Component[]) => {
+const identifyRuntimeFamilies = (
+  all: readonly Component[],
+  components: AppleApplicationProjectionResult["components"],
+) => {
   const families = new Set<
     z.infer<
       typeof appleApplicationProjectionResultSchema
@@ -325,8 +333,13 @@ const identifyRuntimeFamilies = (all: readonly Component[]) => {
     families.add("native");
   if (all.some(({ path }) => isSwiftRuntimeLibrary(path)))
     families.add("swift-objective-c");
-  if (all.some(({ format }) => format === "javascript-bundle"))
-    families.add("javascript");
+  if (components.javascript.length > 0) families.add("javascript");
+  if (
+    components.javascript.some(({ path }) =>
+      isReactNativeBundleConventionPath(path),
+    )
+  )
+    families.add("react-native");
   for (const { path } of all) {
     const convention = nativeRuntimeConvention(path);
     if (convention !== null) families.add(convention);

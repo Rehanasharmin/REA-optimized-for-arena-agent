@@ -148,13 +148,22 @@ find_ghidra() {
 
 find_jdk() {
   local candidate
-  for candidate in /usr/lib/jvm/java-25-openjdk-amd64 \
+  for candidate in "${SANDBOX_ROOT}/jdk" /usr/lib/jvm/java-25-openjdk-amd64 \
     /usr/lib/jvm/java-26-openjdk-amd64 /usr/lib/jvm/java-27-openjdk-amd64; do
     [ -x "${candidate}/bin/java" ] && {
       printf '%s\n' "$candidate"
       return 0
     }
   done
+  return 1
+}
+
+find_jadx_jar() {
+  local candidate="${SANDBOX_ROOT}/jadx/jadx-headless-mcp-0.7.1-all.jar"
+  [ -f "$candidate" ] && {
+    printf '%s\n' "$candidate"
+    return 0
+  }
   return 1
 }
 
@@ -240,9 +249,13 @@ install_node() {
   url="https://nodejs.org/dist/v${want}/${tarball}"
   tmp="$(mktemp -d)"
   log "installing node ${want} (${arch}) into /usr/local"
-  curl -fsSL --max-time 600 -o "${tmp}/${tarball}" "$url" ||
-    die "node download failed: $url"
-  run_privileged tar -xJf "${tmp}/${tarball}" -C /usr/local --strip-components=1
+  if curl -fsSL --connect-timeout 5 --max-time 60 -o "${tmp}/${tarball}" "$url" 2>/dev/null; then
+    run_privileged tar -xJf "${tmp}/${tarball}" -C /usr/local --strip-components=1
+  else
+    log "nodejs.org unreachable; falling back to registry.npmjs.org"
+    run_privileged python3 "${REPO_ROOT}/scripts/sandbox/lib/provision-allowed-engines.py" \
+      node "$want" /usr/local
+  fi
   rm -rf "$tmp"
   hash -r
   [ "$(node -v | sed 's/^v//')" = "$want" ] || die "node install did not take effect"
@@ -253,23 +266,63 @@ install_jdk() {
   JDK_HOME_RESOLVED="$(find_jdk || true)"
   if [ -n "$JDK_HOME_RESOLVED" ]; then
     log "JDK home: ${JDK_HOME_RESOLVED}"
-  elif [ "$WANT_NATIVE" -eq 0 ]; then
-    log "skipped (engine-free profile; pass --with-native to add Ghidra)"
+  elif [ "$WANT_TOOLS" -eq 0 ] && [ "$WANT_NATIVE" -eq 0 ]; then
+    log "skipped (--minimal)"
     return 0
   elif [ "$CHECK_ONLY" -eq 1 ]; then
-    log "no JDK 25+ found; would apt-get install openjdk-25-jdk-headless"
+    log "no JDK 25+ found; would install JDK 25 into ${SANDBOX_ROOT}/jdk"
     return 0
   else
     apt_install_optional openjdk-25-jdk-headless
     JDK_HOME_RESOLVED="$(find_jdk || true)"
+    if [ -z "$JDK_HOME_RESOLVED" ]; then
+      run_privileged mkdir -p "$SANDBOX_ROOT"
+      if run_privileged python3 "${REPO_ROOT}/scripts/sandbox/lib/provision-allowed-engines.py" \
+        jdk "$SANDBOX_ROOT" >/dev/null; then
+        JDK_HOME_RESOLVED="$(find_jdk || true)"
+      fi
+    fi
     [ -n "$JDK_HOME_RESOLVED" ] && log "JDK home: ${JDK_HOME_RESOLVED}" ||
-      warn "no JDK 25+ available; Ghidra will report unsupported_version"
+      warn "no JDK 25+ available; Android JADX/apktool and Ghidra stay unavailable"
   fi
   if [ -n "$JDK_HOME_RESOLVED" ] && [ "$SET_DEFAULT_JAVA" -eq 1 ] &&
     [ "$CHECK_ONLY" -eq 0 ] && have update-alternatives; then
     run_privileged update-alternatives --set java \
-      "${JDK_HOME_RESOLVED}/bin/java" >/dev/null 2>&1 ||
-      warn "could not repoint the default java alternative"
+      "${JDK_HOME_RESOLVED}/bin/java" >/dev/null 2>&1 || true
+  fi
+}
+
+install_android_engines() {
+  step "android-engines"
+  if [ "$WANT_TOOLS" -eq 0 ]; then
+    log "skipped (--minimal)"
+    return 0
+  fi
+  if [ -z "${JDK_HOME_RESOLVED:-}" ]; then
+    warn "JDK unavailable; skipping apktool and jadx-headless-mcp"
+    return 0
+  fi
+  if [ "$CHECK_ONLY" -eq 1 ]; then
+    log "would provision apktool 3.0.3 and jadx-headless-mcp 0.7.1 in ${SANDBOX_ROOT}"
+    return 0
+  fi
+  run_privileged mkdir -p "$SANDBOX_ROOT"
+  if ! have apktool; then
+    run_privileged python3 "${REPO_ROOT}/scripts/sandbox/lib/provision-allowed-engines.py" \
+      apktool "$SANDBOX_ROOT" >/dev/null ||
+      warn "apktool provisioning failed"
+  fi
+  JADX_JAR_RESOLVED="$(find_jadx_jar || true)"
+  if [ -z "$JADX_JAR_RESOLVED" ]; then
+    if run_privileged python3 "${REPO_ROOT}/scripts/sandbox/lib/provision-allowed-engines.py" \
+      jadx "$SANDBOX_ROOT" "$JDK_HOME_RESOLVED" >/dev/null; then
+      JADX_JAR_RESOLVED="$(find_jadx_jar || true)"
+    else
+      warn "jadx-headless-mcp build failed; Android DEX/manifest decompilation stays unavailable"
+    fi
+  fi
+  if [ -n "$JADX_JAR_RESOLVED" ]; then
+    log "jadx-headless-mcp ready: ${JADX_JAR_RESOLVED}"
   fi
 }
 
@@ -337,7 +390,9 @@ install_pwntools() {
   run_privileged mkdir -p "$SANDBOX_ROOT"
   if [ ! -x "${venv}/bin/python3" ]; then
     run_privileged python3 -m venv "$venv" >/dev/null 2>&1 ||
-      python3 -m venv "$venv" >/dev/null 2>&1 || {
+      python3 -m venv "$venv" >/dev/null 2>&1 ||
+      run_privileged python3 -m virtualenv "$venv" >/dev/null 2>&1 ||
+      python3 -m virtualenv "$venv" >/dev/null 2>&1 || {
       warn "could not create a venv; inspect-binary-layout stays unavailable"
       return 0
     }
@@ -382,11 +437,18 @@ install_host_tools() {
 
 write_env_file() {
   step "env-file"
-  local heap jdk ghidra pwn
+  local heap jdk ghidra pwn jadx_jar apktool_bin apksigner_jar
   heap="$(node_heap_mib)"
   jdk="${JDK_HOME_RESOLVED:-${JAVA_HOME:-}}"
   ghidra="${GHIDRA_HOME_RESOLVED:-${GHIDRA_INSTALL_DIR:-}}"
   pwn="${PWNTOOLS_PYTHON_RESOLVED:-${REA_PWNTOOLS_PYTHON:-}}"
+  jadx_jar="${JADX_JAR_RESOLVED:-${REA_JADX_MCP_JAR:-}}"
+  apktool_bin="$(command -v apktool 2>/dev/null || true)"
+  [ -z "$apktool_bin" ] && [ -x "${SANDBOX_ROOT}/apktool/apktool" ] &&
+    apktool_bin="${SANDBOX_ROOT}/apktool/apktool"
+  apksigner_jar=""
+  [ -f "${SANDBOX_ROOT}/apktool/apksigner.jar" ] &&
+    apksigner_jar="${SANDBOX_ROOT}/apktool/apksigner.jar"
   if [ "$CHECK_ONLY" -eq 1 ]; then
     log "would write ${ENV_FILE}"
     return 0
@@ -395,8 +457,8 @@ write_env_file() {
     printf '# Generated by scripts/sandbox/provision-sandbox.sh — machine specific.\n'
     printf '# Source before running REA:  set -a; . ./.rea-sandbox.env; set +a\n'
     printf 'PATH=%s\n' \
-      "$(printf '%s' "/usr/local/bin:${PATH}" | tr ':' '\n' |
-        awk '!seen[$0]++' | paste -sd:)"
+      "$(printf '%s' "${jdk:+${jdk}/bin:}/usr/local/bin:${PATH}" | tr ':' '\n' |
+        awk 'NF && !seen[$0]++' | paste -sd:)"
     printf 'NODE_OPTIONS=--max-old-space-size=%s\n' "$heap"
     # Without this the Rust compiler asks for 3 GiB on a 2 GiB host and is
     # OOM-killed before it can report anything.
@@ -404,6 +466,9 @@ write_env_file() {
     [ -n "$jdk" ] && printf 'JAVA_HOME=%s\n' "$jdk"
     [ -n "$ghidra" ] && printf 'GHIDRA_INSTALL_DIR=%s\n' "$ghidra"
     [ -n "$pwn" ] && printf 'REA_PWNTOOLS_PYTHON=%s\n' "$pwn"
+    [ -n "$jadx_jar" ] && printf 'REA_JADX_MCP_JAR=%s\n' "$jadx_jar"
+    [ -n "$apktool_bin" ] && printf 'REA_APKTOOL_COMMAND=%s\n' "$apktool_bin"
+    [ -n "$apksigner_jar" ] && printf 'REA_APKSIGNER_JAR=%s\n' "$apksigner_jar"
     # Advertise WABT only when it is the exact build REA admits (1.0.42); the
     # distro package is older and an advertised-but-rejected toolchain produces
     # worse diagnostics than an unset variable.
@@ -412,7 +477,6 @@ write_env_file() {
       printf 'REA_WABT_BIN_DIRECTORY=%s\n' \
         "$(dirname "$(command -v wasm-validate)")"
     fi
-    have apktool && printf 'REA_APKTOOL_COMMAND=%s\n' "$(command -v apktool)"
     have prlimit && printf 'REA_TSHARK_PRLIMIT_COMMAND=%s\n' "$(command -v prlimit)"
     [ "$WANT_BROWSER" -eq 1 ] && have chromium &&
       printf 'REA_BROWSER_EXECUTABLE=%s\n' "$(command -v chromium)"
@@ -499,6 +563,7 @@ main() {
   JDK_HOME_RESOLVED=""
   GHIDRA_HOME_RESOLVED=""
   PWNTOOLS_PYTHON_RESOLVED=""
+  JADX_JAR_RESOLVED=""
 
   check_disk
   ensure_swap
@@ -507,6 +572,7 @@ main() {
   install_ghidra
   install_pwntools
   install_host_tools
+  install_android_engines
   write_env_file
   build_rea
   summary

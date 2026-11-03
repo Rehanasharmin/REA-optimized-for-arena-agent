@@ -6,6 +6,7 @@ import { ADB_PROVIDER_IDENTITY } from "../adb/AdbProviderIdentity.js";
 import { JADX_PROVIDER_IDENTITY } from "../android/JadxRelease.js";
 import { APK_SIGNATURE_PROVIDER_IDENTITY } from "../apkSignature/ApkSignatureRelease.js";
 import { APKTOOL_PROVIDER_IDENTITY } from "../apktool/ApktoolProviderIdentity.js";
+import { HERMES_BYTECODE_PROVIDER_IDENTITY } from "../domain/hermes/hermesBytecode.js";
 import {
   HAR_CAPTURE_PROVIDER_IDENTITY,
   MITMPROXY_CAPTURE_PROVIDER_IDENTITY,
@@ -144,6 +145,13 @@ export const CAPABILITY_DECLARATIONS = {
     providers: [
       providerBinding(APK_SIGNATURE_PROVIDER_IDENTITY, {
         group: "APK_SIGNATURE_TOOL_CONTRACTS",
+      }),
+    ],
+  },
+  hermesBytecode: {
+    providers: [
+      providerBinding(HERMES_BYTECODE_PROVIDER_IDENTITY, {
+        group: "HERMES_TOOL_CONTRACTS",
       }),
     ],
   },

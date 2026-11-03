@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-02T11:50:36.423Z",
+  "generated_at": "2026-11-03T10:46:42.760Z",
   "platform": "linux/x64",
   "node": "24.22.1",
   "used_sandbox_env_file": true,
@@ -12,12 +12,22 @@
     {
       "label": "java",
       "ok": true,
-      "detail": "/usr/lib/jvm/java-25-openjdk-amd64"
+      "detail": "/opt/rea-engines/jdk"
+    },
+    {
+      "label": "apktool",
+      "ok": true,
+      "detail": "/usr/local/bin/apktool"
+    },
+    {
+      "label": "jadx",
+      "ok": true,
+      "detail": "/opt/rea-engines/jadx/jadx-headless-mcp-0.7.1-all.jar"
     },
     {
       "label": "ghidra",
-      "ok": true,
-      "detail": "/opt/rea-engines/ghidra_12.2_PUBLIC"
+      "ok": false,
+      "detail": "GHIDRA_INSTALL_DIR unset"
     },
     {
       "label": "pwntools",
@@ -31,67 +41,109 @@
       "label": "CLI version report",
       "status": "ok",
       "detail": "6.8.0",
-      "args": ["--version"]
+      "args": [
+        "--version"
+      ]
     },
     {
       "id": "doctor",
       "label": "Env doctor",
       "status": "ok",
-      "detail": "unhealthy: hopper, ida-registration, jadx, kuna-installation, skill:identity",
-      "args": ["doctor", "--json"]
+      "detail": "unhealthy: hopper, ghidra, ida-registration, kuna-installation, skill:identity",
+      "args": [
+        "doctor",
+        "--json"
+      ]
     },
     {
       "id": "environment",
       "label": "Provider inventory",
       "status": "ok",
       "detail": "6/11 capability groups available",
-      "args": ["providers", "--format", "json"]
+      "args": [
+        "providers",
+        "--format",
+        "json"
+      ]
     },
     {
       "id": "byte-entropy",
       "label": "Byte entropy (pure)",
       "status": "ok",
-      "detail": "evidence ev_92b736240575…",
+      "detail": "evidence ev_ccb6e5db18e2…",
       "args": [
         "inspect-byte-entropy",
-        "/tmp/rea-sandbox-fixtures-nkD4j0/fixture"
+        "/tmp/rea-sandbox-fixtures-s8ubX5/fixture"
       ]
     },
     {
       "id": "elf-notes",
       "label": "ELF notes (pure)",
       "status": "ok",
-      "detail": "evidence ev_b841ec8e2b70…",
-      "args": ["inspect-elf-notes", "/tmp/rea-sandbox-fixtures-nkD4j0/fixture"]
+      "detail": "evidence ev_2142d7ff41f9…",
+      "args": [
+        "inspect-elf-notes",
+        "/tmp/rea-sandbox-fixtures-s8ubX5/fixture"
+      ]
     },
     {
       "id": "artifact",
       "label": "Archive inventory (pure)",
       "status": "ok",
-      "detail": "evidence ev_e45f4ad91899…",
+      "detail": "evidence ev_7ef00d80fb87…",
       "args": [
         "inspect-artifact",
-        "/tmp/rea-sandbox-fixtures-nkD4j0/fixture.zip"
+        "/tmp/rea-sandbox-fixtures-s8ubX5/fixture.zip"
+      ]
+    },
+    {
+      "id": "apk-signature",
+      "label": "APK signature (pure)",
+      "status": "ok",
+      "detail": "evidence ev_cef14fbb45f3…",
+      "args": [
+        "inspect-apk-signature",
+        "/tmp/rea-sandbox-fixtures-s8ubX5/fixture.apk"
+      ]
+    },
+    {
+      "id": "hermes-bytecode",
+      "label": "Hermes bytecode (pure)",
+      "status": "ok",
+      "detail": "evidence ev_1d8c1010d4b0…",
+      "args": [
+        "inspect-hermes-bytecode",
+        "/tmp/rea-sandbox-fixtures-s8ubX5/fixture.apk"
+      ]
+    },
+    {
+      "id": "sqlite",
+      "label": "SQLite database (node:sqlite)",
+      "status": "ok",
+      "detail": "evidence ev_5a5974551912…",
+      "args": [
+        "inspect-sqlite-database",
+        "/tmp/rea-sandbox-fixtures-s8ubX5/fixture.sqlite"
       ]
     },
     {
       "id": "javascript",
       "label": "JavaScript app graph (no engine)",
       "status": "ok",
-      "detail": "evidence ev_bf2257f64676…",
+      "detail": "evidence ev_256c771f3ffa…",
       "args": [
         "analyze-javascript-application",
-        "/tmp/rea-sandbox-fixtures-nkD4j0/javascript-app"
+        "/tmp/rea-sandbox-fixtures-s8ubX5/javascript-app"
       ]
     },
     {
       "id": "objdump",
       "label": "objdump inspection",
       "status": "ok",
-      "detail": "evidence ev_acefc3aecb17…",
+      "detail": "evidence ev_5e8f0130c72e…",
       "args": [
         "inspect-with-objdump",
-        "/tmp/rea-sandbox-fixtures-nkD4j0/fixture",
+        "/tmp/rea-sandbox-fixtures-s8ubX5/fixture",
         "disassemble"
       ]
     },
@@ -99,25 +151,29 @@
       "id": "binary-layout",
       "label": "Binary layout (pwntools)",
       "status": "ok",
-      "detail": "evidence ev_d54863717961…",
+      "detail": "evidence ev_09149a4155a2…",
       "args": [
         "inspect-binary-layout",
-        "/tmp/rea-sandbox-fixtures-nkD4j0/fixture"
+        "/tmp/rea-sandbox-fixtures-s8ubX5/fixture"
       ]
     },
     {
       "id": "pcap",
       "label": "TShark client",
-      "status": "ok",
-      "detail": "evidence ev_6e2170cd1a0a…",
-      "args": ["inspect-pcap-client"]
+      "status": "needs-config",
+      "detail": "capability_unavailable: tshark was not found in an absolute PATH entry; add it to PATH or set REA_TSHARK_COMMAND to its absolute path. Supply Wireshar",
+      "args": [
+        "inspect-pcap-client"
+      ]
     },
     {
       "id": "apktool",
       "label": "apktool client",
       "status": "ok",
-      "detail": "evidence ev_24361e67cca1…",
-      "args": ["inspect-apktool-client"]
+      "detail": "evidence ev_475e7aa8012e…",
+      "args": [
+        "inspect-apktool-client"
+      ]
     },
     {
       "id": "wasm",
@@ -126,26 +182,7 @@
       "detail": "capability_unavailable: WABT configuration cannot be used",
       "args": [
         "inspect-wasm-artifact",
-        "/tmp/rea-sandbox-fixtures-nkD4j0/empty.wasm"
-      ]
-    },
-    {
-      "id": "ghidra-analyze",
-      "label": "Ghidra deep analysis",
-      "status": "ok",
-      "detail": "evidence ev_56d6a5b1d851…",
-      "args": ["analyze", "/tmp/rea-sandbox-fixtures-nkD4j0/fixture"]
-    },
-    {
-      "id": "ghidra-decompile",
-      "label": "Ghidra decompile",
-      "status": "ok",
-      "detail": "evidence ev_068b9b0f4fca…",
-      "args": [
-        "decompile",
-        "/tmp/rea-sandbox-fixtures-nkD4j0/fixture",
-        "--procedure",
-        "main"
+        "/tmp/rea-sandbox-fixtures-s8ubX5/empty.wasm"
       ]
     }
   ]

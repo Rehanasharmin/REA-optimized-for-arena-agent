@@ -19,6 +19,7 @@ import {
 } from "./artifactGraph.js";
 import { digestCanonicalValue } from "./canonicalDigest.js";
 import { isJavaScriptSourcePath } from "./javascript/javascriptArtifactFiles.js";
+import { isAndroidJavaScriptBundlePath } from "./nativeConvention.js";
 import { admitRawBinary } from "./rawBinary.js";
 import { uniqueSorted } from "./canonicalOrdering.js";
 import { evidenceSchema, parseEvidence, type Evidence } from "./evidence.js";
@@ -278,16 +279,29 @@ const allHypotheses = (
   inventory: ArtifactInventoryResult,
   evidenceId: string,
 ): ArtifactInspectionResult["hypotheses"] => {
+  const format = inventory.manifest.root_format;
   const statements =
-    inventory.manifest.root_format === "pe"
+    format === "pe"
       ? [
           "The PE artifact may contain managed CLI metadata or native code; inventory bytes alone do not distinguish them.",
         ]
-      : ["asar", "javascript-bundle"].includes(inventory.manifest.root_format)
+      : ["asar", "javascript-bundle"].includes(format)
         ? [
             "The artifact may contain a recoverable JavaScript application graph.",
           ]
-        : [];
+        : format === "apk"
+          ? [
+              "The APK archive may combine DEX bytecode, binary Android resources, signing blocks, native JNI libraries, and embedded cross-platform payloads (such as React Native Hermes, Flutter AOT, or Unity IL2CPP); inventory bytes alone do not decode their semantics.",
+            ]
+          : format === "ipa"
+            ? [
+                "The IPA archive may contain Apple application bundles, Mach-O executables, frameworks, provisioning profiles, and embedded script payloads.",
+              ]
+            : ["hap", "hsp", "app-pack"].includes(format)
+              ? [
+                  "The HarmonyOS package may contain Stage or FA manifests, Ark bytecode, resources, native N-API libraries, or JavaScript payloads.",
+                ]
+              : [];
   return statements.map((statement) => {
     const semantic = {
       statement,
@@ -368,9 +382,103 @@ const probesFor = (
       : [];
   if (format === "esp-image") return espFlashDumpProbes(inventory);
   if (format === "fit") return fitProbes(inventory);
+  if (format === "apk") return apkProbes(inventory);
   return format === "directory"
     ? directoryProbes(inventory)
     : probesForFormat(format);
+};
+
+const apkProbes = (
+  inventory: ArtifactInventoryResult,
+): ArtifactInspectionResult["next_probes"] => {
+  const files = inventory.occurrences.filter(
+    ({ entry_kind }) => entry_kind === "file",
+  );
+  const hasNativeSo = files.some(
+    ({ artifact_format, logical_path }) =>
+      artifact_format === "elf" ||
+      /(?:^|\/)lib\/[^/]+\/[^/]+\.so$/iu.test(logical_path),
+  );
+  const hasDex = files.some(({ logical_path }) =>
+    /(?:^|\/)[^/]+\.dex$/iu.test(logical_path),
+  );
+  const hasJsOrHermesBundle = files.some(
+    ({ artifact_format, logical_path }) =>
+      artifact_format === "javascript-bundle" ||
+      isAndroidJavaScriptBundlePath(logical_path),
+  );
+  const hasFlutter = files.some(({ logical_path }) =>
+    /^lib\/[^/]+\/(?:libflutter|libapp)\.so$/u.test(logical_path),
+  );
+  const hasIl2cppMetadata = files.some(({ logical_path }) =>
+    /(?:^|\/)global-metadata\.dat$/iu.test(logical_path),
+  );
+  return [
+    {
+      operation: "project_android_application_graph",
+      rationale:
+        "Project this inspection's inventory Evidence into an execution-free Android component, runtime-family, and bridge-candidate graph.",
+      authority: "artifact-bytes",
+    },
+    {
+      operation: "inspect_apk_signature",
+      rationale:
+        "Inspect declared v1/v2/v3/v3.1 APK signers, certificate digests, SDK ranges, and signing lineage without executing Android code.",
+      authority: "artifact-bytes",
+    },
+    {
+      operation: "inspect_android_package",
+      rationale:
+        "Decode AndroidManifest.xml package metadata, permissions, and exported components with headless JADX when configured.",
+      authority: "managed-static-analysis",
+    },
+    {
+      operation: "decode_android_resources",
+      rationale:
+        "Decode binary AndroidManifest.xml and resources.arsc tables into a fresh workspace with Apktool when installed.",
+      authority: "artifact-bytes",
+    },
+    ...(hasDex && hasNativeSo
+      ? [
+          {
+            operation: "inspect_android_jni_bindings",
+            rationale:
+              "Correlate DEX native method declarations with exported JNI symbols across packaged ELF shared libraries.",
+            authority: "managed-static-analysis" as const,
+          },
+        ]
+      : []),
+    ...(hasJsOrHermesBundle
+      ? [
+          {
+            operation: "inspect_hermes_bytecode",
+            rationale:
+              "Inspect embedded React Native Hermes bytecode (.hbc or assets/*.bundle) headers, function table, and string pool without executing JavaScript.",
+            authority: "artifact-bytes" as const,
+          },
+        ]
+      : []),
+    ...(hasFlutter
+      ? [
+          {
+            operation: "identify_flutter_build",
+            rationale:
+              "Identify Flutter snapshot hashes, engine build IDs, and Dart toolchain metadata from libflutter.so and libapp.so.",
+            authority: "artifact-bytes" as const,
+          },
+        ]
+      : []),
+    ...(hasIl2cppMetadata
+      ? [
+          {
+            operation: "inspect_il2cpp_metadata",
+            rationale:
+              "Extract global-metadata.dat with extract_artifact and inspect Unity IL2CPP type, method, and string metadata.",
+            authority: "artifact-bytes" as const,
+          },
+        ]
+      : []),
+  ];
 };
 
 // An ESP image that its reader found at the start of a flash dump read from
@@ -537,6 +645,39 @@ const probesForFormat = (
       {
         operation: "inspect_plist",
         rationale: "Parse property-list values without executing the artifact.",
+        authority: "artifact-bytes",
+      },
+    ];
+  if (format === "ipa")
+    return [
+      {
+        operation: "project_apple_application_graph",
+        rationale:
+          "Project this inspection's inventory Evidence into Apple bundle roles, runtime-family hints, and bridge candidates.",
+        authority: "artifact-bytes",
+      },
+      {
+        operation: "extract_artifact",
+        rationale:
+          "Extract Payload/*.app members into a fresh owned directory to inspect Mach-O binaries, Info.plist files, or embedded bundles.",
+        authority: "artifact-bytes",
+      },
+    ];
+  if (["hap", "hsp", "app-pack"].includes(format))
+    return [
+      {
+        operation: "project_harmony_application_graph",
+        rationale:
+          "Project this inspection's inventory Evidence into HarmonyOS packaging-model hints, Ark/native/JavaScript components, and N-API bridge candidates.",
+        authority: "artifact-bytes",
+      },
+    ];
+  if (["aab", "xapk", "jar"].includes(format))
+    return [
+      {
+        operation: "extract_artifact",
+        rationale:
+          "Extract archive members (such as split APKs, DEX files, or JVM .class entries) into a fresh owned directory for format-specific analysis.",
         authority: "artifact-bytes",
       },
     ];

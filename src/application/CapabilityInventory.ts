@@ -478,6 +478,7 @@ const workflowAvailabilityFor = ({
     );
   if (
     name === "inspect_apk_signature" ||
+    name === "inspect_hermes_bytecode" ||
     name === "inspect_desktop_application" ||
     name === "inspect_go_binary" ||
     name === "inspect_il2cpp_metadata" ||

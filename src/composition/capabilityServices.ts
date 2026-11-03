@@ -19,6 +19,7 @@ import {
 } from "./signals.js";
 import { wasmArtifactModule } from "./wasm.js";
 import { apkSignatureModule } from "./apkSignature.js";
+import { hermesBytecodeModule } from "./hermes.js";
 import {
   evmInterfaceModule,
   evmHostSupported,
@@ -81,6 +82,7 @@ import type { PacketCaptureService } from "../application/captures/PacketCapture
 import type { SignalRecordingService } from "../application/signals/SignalRecordingService.js";
 import type { WasmArtifactService } from "../application/wasm/WasmArtifactService.js";
 import type { ApkSignatureService } from "../application/apkSignature/ApkSignatureService.js";
+import type { HermesBytecodeService } from "../application/hermes/HermesBytecodeService.js";
 import type { EvmInterfaceService } from "../application/evm/EvmInterfaceService.js";
 import type { SqliteDatabaseService } from "../application/sqlite/SqliteDatabaseService.js";
 import type { Il2cppMetadataService } from "../application/il2cpp/Il2cppMetadataService.js";
@@ -116,6 +118,7 @@ export interface CapabilityServiceOptions {
   readonly signalRecording?: SignalRecordingService;
   readonly wasmArtifact?: WasmArtifactService;
   readonly apkSignature?: ApkSignatureService;
+  readonly hermesBytecode?: HermesBytecodeService;
   readonly evmInterface?: EvmInterfaceService;
   readonly sqliteDatabase?: SqliteDatabaseService;
   readonly binaryLayout?: BinaryLayoutService;
@@ -236,6 +239,9 @@ const modules = {
   ),
   apkSignature: service(({ environment, options }) =>
     apkSignatureModule.create(environment, options.apkSignature),
+  ),
+  hermesBytecode: service(({ environment, options }) =>
+    hermesBytecodeModule.create(environment, options.hermesBytecode),
   ),
   evmInterface: service(
     ({ environment, options }) =>

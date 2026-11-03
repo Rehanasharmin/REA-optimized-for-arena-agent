@@ -24,10 +24,10 @@ If you are not specifically working in that sandbox, **use upstream instead**: [
 
 ## What this fork changes
 
-- **Sandbox-first entrypoint.** A bootstrap script provisions engines into `/opt/rea-engines`, writes a gitignored `.rea-sandbox.env`, and verifies what actually works on the host.
+- **Sandbox-first entrypoint.** A bootstrap script provisions Node.js, JDK 25, Apktool, `jadx-headless-mcp`, and `pwntools` into `/opt/rea-engines` (with allowed-registry fallbacks over npm, PyPI, and GitHub when OS mirrors are blocked), writes a gitignored `.rea-sandbox.env`, and verifies what actually works on the host.
 - **CLI-driven, no MCP client required.** The host drives REA through `node scripts/rea.mjs`, not a registered MCP server.
 - **Trimmed checkout.** Development material removed for the file budget can be restored with `bash scripts/sandbox/slim-repo.sh --restore`.
-- **Honest limits.** Hopper, IDA, JEB, JADX, ADB, browsers, Frida, firmware, and WASM are not available in the default sandbox; the verified capability matrix lives in [docs/sandbox-environment.md](docs/sandbox-environment.md).
+- **Honest limits.** Hopper, IDA, JEB, ADB, browsers, Frida, firmware, and WASM are not available in the default sandbox; the verified capability matrix lives in [docs/sandbox-environment.md](docs/sandbox-environment.md).
 
 Nothing in the analysis engines or Evidence model has been forked or reimplemented — it is all upstream code.
 
@@ -58,13 +58,14 @@ Agents should read [AGENTS.md](AGENTS.md) first — it is the runbook — then [
 
 The default sandbox covers static inspection and a subset of the upstream catalog. Confirmed capabilities include:
 
+- **Android APKs & React Native / Hermes** — APK inventory & application-graph projection (`project-android-application-graph`), v1/v2/v3 signing inspection (`inspect-apk-signature`), pure-TS Hermes bytecode bundle inspection (`inspect-hermes-bytecode`), Apktool resource/manifest decoding (`decode-android-resources`), and JADX DEX/manifest/JNI/xref decompilation (`inspect-android-package`, `search-android-classes`, `inspect-android-class`, `inspect-android-method`, `inspect-android-jni-bindings`, `trace-android-references`).
 - **JavaScript / Electron** — modules, imports, source maps, routes, IPC and native add-on relationships (static, no native engine).
 - **.NET assemblies** — metadata, CIL instructions, declared native dependencies, build comparisons (static).
 - **Native binaries** — pseudocode, assembly, strings, symbols, calls and references via Ghidra headless, **only with `--with-native`**.
-- **Go, Rust, ELF notes, PE imports, PE certificates, kernel modules, Erlang BEAM, model artifacts, IL2CPP metadata, Godot PCK, Apple IPS** — built-in static inspection, no external engine.
+- **Go, Rust, ELF notes, PE imports, PE certificates, kernel modules, Erlang BEAM, SQLite (`node:sqlite`), model artifacts, Flutter/AOT, IL2CPP metadata, Godot PCK, Apple IPS** — built-in static inspection, no external engine.
 - **Desktop installations and packages** — bounded directory/header inspection, digests, plists, Apple bundle anatomy.
 
-Not available in the default sandbox: Hopper, IDA, JEB, JADX (Android APK), ADB devices, browser observation, Frida, firmware, WASM, packet captures, and recorded logic signals. See [docs/sandbox-environment.md](docs/sandbox-environment.md) for the authoritative matrix and how to add each one.
+Not available in the default sandbox: Hopper, IDA, JEB, ADB devices, browser observation, Frida, firmware, WASM, packet captures (when `tshark` cannot be installed), and recorded logic signals. See [docs/sandbox-environment.md](docs/sandbox-environment.md) for the authoritative matrix and how to add each one.
 
 For the full upstream feature list — Android, iOS, firmware, WASM, network captures, RL environments, and everything else — see the [upstream README](https://github.com/morluto/rea#what-you-can-analyze).
 

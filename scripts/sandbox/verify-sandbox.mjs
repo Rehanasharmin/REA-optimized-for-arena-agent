@@ -24,6 +24,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -202,12 +203,75 @@ module.exports = { verifyKey, currentPlan };
 `,
 };
 
+/** Deterministic minimal Hermes v90 bytecode image with a verified SHA-1 footer. */
+function minimalHermesV90Bundle() {
+  const fnName = Buffer.from("sandboxHermesMain", "latin1");
+  const strLiteral = Buffer.from("sandbox-hermes-probe", "latin1");
+  const stringStorage = Buffer.concat([fnName, strLiteral]);
+  const pad4 = (len) => (len % 4 === 0 ? 0 : 4 - (len % 4));
+  const storagePad = Buffer.alloc(pad4(stringStorage.length));
+  const bytecode = Buffer.from([0x24, 0x00, 0x32, 0x00]); // LoadConstUndefined r0; Ret r0
+
+  // Layout: 128-byte header + 16-byte SmallFuncHeader + 8-byte StringKinds (2 runs)
+  // + 4-byte identifierHash + 8-byte SmallStringTable (2 entries) + stringStorage + pad + 4-byte bytecode + 20-byte SHA-1 footer
+  const fnOffset = 128 + 16 + 8 + 4 + 8 + stringStorage.length + storagePad.length;
+  const totalBytes = fnOffset + bytecode.length + 20;
+  const buf = Buffer.alloc(totalBytes);
+
+  // Header
+  buf.writeBigUInt64LE(0x1f1903c103bc1fc6n, 0);
+  buf.writeUInt32LE(90, 8); // version 90
+  createHash("sha1").update("sandbox-source").digest().copy(buf, 12);
+  buf.writeUInt32LE(totalBytes, 32); // fileLength
+  buf.writeUInt32LE(0, 36); // globalCodeIndex
+  buf.writeUInt32LE(1, 40); // functionCount
+  buf.writeUInt32LE(2, 44); // stringKindCount
+  buf.writeUInt32LE(1, 48); // identifierCount
+  buf.writeUInt32LE(2, 52); // stringCount
+  buf.writeUInt32LE(0, 56); // overflowStringCount
+  buf.writeUInt32LE(stringStorage.length, 60); // stringStorageSize
+  buf.writeUInt8(0x01, 108); // BytecodeOptions (staticBuiltins)
+
+  // SmallFuncHeader[0] at 128..144: offset=fnOffset, paramCount=1, bytecodeSize=4, functionName=0, frameSize=1
+  buf.writeUInt32LE((fnOffset & 0x1ffffff) | ((1 & 0x7f) << 25), 128);
+  buf.writeUInt32LE((bytecode.length & 0x7fff) | ((0 & 0x1ffff) << 15), 132);
+  buf.writeUInt32LE((0 & 0x1ffffff) | ((1 & 0x7f) << 25), 136);
+  buf.writeUInt8(0x02 << 0, 143); // ProhibitNone
+
+  // StringKinds at 144..152: 1 Identifier (bit 31 = 1), 1 String (bit 31 = 0)
+  buf.writeUInt32LE(0x80000001, 144);
+  buf.writeUInt32LE(0x00000001, 148);
+
+  // IdentifierHashes at 152..156
+  buf.writeUInt32LE(0x12345678, 152);
+
+  // SmallStringTable at 156..164
+  buf.writeUInt32LE(((0 & 0x7fffff) << 1) | ((fnName.length & 0xff) << 24), 156);
+  buf.writeUInt32LE(
+    ((fnName.length & 0x7fffff) << 1) | ((strLiteral.length & 0xff) << 24),
+    160,
+  );
+
+  // StringStorage at 164
+  stringStorage.copy(buf, 164);
+  bytecode.copy(buf, fnOffset);
+
+  // Footer SHA-1
+  createHash("sha1")
+    .update(buf.subarray(0, totalBytes - 20))
+    .digest()
+    .copy(buf, totalBytes - 20);
+  return buf;
+}
+
 async function buildFixtures(environment) {
   const root = await mkdtemp(join(tmpdir(), "rea-sandbox-fixtures-"));
   const workspace = {
     root,
     elf: null,
     zip: join(root, "fixture.zip"),
+    apk: join(root, "fixture.apk"),
+    sqlite: null,
     javascript: join(root, "javascript-app"),
     wasm: join(root, "empty.wasm"),
   };
@@ -221,6 +285,7 @@ async function buildFixtures(environment) {
     cwd: root,
   });
   if (build.status === 0 && existsSync(compiled)) workspace.elf = compiled;
+  else if (existsSync("/bin/ls")) workspace.elf = "/bin/ls";
 
   await writeFile(
     workspace.zip,
@@ -235,6 +300,35 @@ async function buildFixtures(environment) {
       },
     ]),
   );
+
+  await writeFile(
+    workspace.apk,
+    storedZip([
+      {
+        name: "AndroidManifest.xml",
+        data: Buffer.from([0x03, 0x00, 0x08, 0x00, 0x08, 0x00, 0x00, 0x00]),
+      },
+      {
+        name: "assets/index.android.bundle",
+        data: minimalHermesV90Bundle(),
+      },
+    ]),
+  );
+
+  try {
+    const sqliteMod = await import("node:sqlite");
+    if (typeof sqliteMod.DatabaseSync === "function") {
+      const sqlitePath = join(root, "fixture.sqlite");
+      const db = new sqliteMod.DatabaseSync(sqlitePath);
+      db.exec(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT); INSERT INTO items VALUES (1, 'sandbox');",
+      );
+      db.close();
+      workspace.sqlite = sqlitePath;
+    }
+  } catch {
+    workspace.sqlite = null;
+  }
 
   for (const [name, contents] of Object.entries(FIXTURE_JS))
     await writeFileInTree(workspace.javascript, name, contents);
@@ -308,6 +402,27 @@ const probes = () => {
       args: ["inspect-artifact", "<zip>"],
       core: true,
       needs: "zip",
+    },
+    {
+      id: "apk-signature",
+      label: "APK signature (pure)",
+      args: ["inspect-apk-signature", "<apk>"],
+      core: true,
+      needs: "apk",
+    },
+    {
+      id: "hermes-bytecode",
+      label: "Hermes bytecode (pure)",
+      args: ["inspect-hermes-bytecode", "<apk>"],
+      core: true,
+      needs: "apk",
+    },
+    {
+      id: "sqlite",
+      label: "SQLite database (node:sqlite)",
+      args: ["inspect-sqlite-database", "<sqlite>"],
+      core: true,
+      needs: "sqlite",
     },
     {
       id: "javascript",
@@ -433,7 +548,19 @@ const environmentChecks = (environment) => {
   note(
     "java",
     javaHome !== undefined && existsSync(join(javaHome, "bin/java")),
-    javaHome ?? "JAVA_HOME unset (Ghidra needs a 64-bit JDK 25+)",
+    javaHome ?? "JAVA_HOME unset (JADX/apktool/Ghidra need a 64-bit JDK)",
+  );
+  const apktool = environment.REA_APKTOOL_COMMAND;
+  note(
+    "apktool",
+    apktool !== undefined && existsSync(apktool),
+    apktool ?? "REA_APKTOOL_COMMAND unset",
+  );
+  const jadxJar = environment.REA_JADX_MCP_JAR;
+  note(
+    "jadx",
+    jadxJar !== undefined && existsSync(jadxJar),
+    jadxJar ?? "REA_JADX_MCP_JAR unset",
   );
   const ghidraHome = environment.GHIDRA_INSTALL_DIR;
   note(
@@ -457,13 +584,15 @@ async function main() {
   const fixtures = await buildFixtures(environment);
   try {
     for (const probe of probes()) {
-      const missing = probe.needs === "elf" && fixtures.elf === null;
+      const missing =
+        (probe.needs === "elf" && fixtures.elf === null) ||
+        (probe.needs === "sqlite" && fixtures.sqlite === null);
       if (missing) {
         table.push({
           id: probe.id,
           label: probe.label,
           status: "skipped",
-          detail: "no C compiler (cc) to build a fixture ELF",
+          detail: `missing ${probe.needs} fixture prerequisite`,
         });
         continue;
       }
@@ -472,11 +601,15 @@ async function main() {
           ? fixtures.elf
           : argument === "<zip>"
             ? fixtures.zip
-            : argument === "<javascript>"
-              ? fixtures.javascript
-              : argument === "<wasm>"
-                ? fixtures.wasm
-                : argument,
+            : argument === "<apk>"
+              ? fixtures.apk
+              : argument === "<sqlite>"
+                ? fixtures.sqlite
+                : argument === "<javascript>"
+                  ? fixtures.javascript
+                  : argument === "<wasm>"
+                    ? fixtures.wasm
+                    : argument,
       );
       const timeoutMs = baseTimeout * (probe.timeoutScale ?? 1);
       const result = await run(

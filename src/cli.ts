@@ -9,6 +9,7 @@ import { registerCaptureCommands } from "./cli/captureCommands.js";
 import { registerSignalCommands } from "./cli/signalCommands.js";
 import { registerWasmCommands } from "./cli/wasmCommands.js";
 import { registerApkSignatureCommands } from "./cli/apkSignatureCommands.js";
+import { registerHermesCommands } from "./cli/hermesCommands.js";
 import { snapshotEnvironment } from "./process/snapshotEnvironment.js";
 import { createDirectAnalysis } from "./composition/directAnalysis.js";
 import { registerEvmCommands } from "./cli/evmCommands.js";
@@ -190,6 +191,7 @@ export const createCli = (
     artifact: () => {
       registerWasmCommands(cli, logger, environment);
       registerApkSignatureCommands(cli, logger, environment);
+      registerHermesCommands(cli, logger, environment);
       registerCaptureCommands(cli, logger, environment);
       registerSignalCommands(cli, logger, environment);
       registerEvmCommands(cli, logger, environment);

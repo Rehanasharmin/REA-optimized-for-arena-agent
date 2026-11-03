@@ -62,8 +62,8 @@ env_ok=0
 # probe the conventional locations too.
 jdk_home="${JAVA_HOME:-}"
 if [ -z "$jdk_home" ]; then
-  for candidate in /usr/lib/jvm/java-2*-openjdk-amd64; do
-    [ -x "${candidate}/bin/java" ] && jdk_home="$candidate"
+  for candidate in /opt/rea-engines/jdk /usr/lib/jvm/java-2*-openjdk-amd64; do
+    [ -x "${candidate}/bin/java" ] && jdk_home="$candidate" && break
   done
 fi
 
@@ -74,10 +74,18 @@ if [ -z "$ghidra_home" ]; then
   done
 fi
 
+jadx_jar="${REA_JADX_MCP_JAR:-}"
+if [ -z "$jadx_jar" ] && [ -f /opt/rea-engines/jadx/jadx-headless-mcp-0.7.1-all.jar ]; then
+  jadx_jar="/opt/rea-engines/jadx/jadx-headless-mcp-0.7.1-all.jar"
+fi
+
 pwntools_python="${REA_PWNTOOLS_PYTHON:-}"
 if [ -z "$pwntools_python" ] && [ -x /opt/rea-engines/py/bin/python3 ]; then
   pwntools_python="/opt/rea-engines/py/bin/python3"
 fi
+
+android_ok=0
+if [ -n "$jdk_home" ] && [ -n "$jadx_jar" ]; then android_ok=1; fi
 
 engine_ok=0
 if [ -n "$jdk_home" ] && [ -n "$ghidra_home" ]; then engine_ok=1; fi
@@ -95,11 +103,12 @@ status_line() {
 }
 
 if [ "$JSON" -eq 1 ]; then
-  printf '{"ready":%s,"deep_analysis":%s,"node":{"ok":%s,"want":"%s","have":"%s"},"dependencies":%s,"runtime":%s,"env_file":%s,"jdk":"%s","ghidra":"%s","pwntools":"%s"}\n' \
+  printf '{"ready":%s,"android_analysis":%s,"deep_analysis":%s,"node":{"ok":%s,"want":"%s","have":"%s"},"dependencies":%s,"runtime":%s,"env_file":%s,"jdk":"%s","jadx":"%s","ghidra":"%s","pwntools":"%s"}\n' \
     "$([ "$ready" -eq 1 ] && echo true || echo false)" \
+    "$([ "$android_ok" -eq 1 ] && echo true || echo false)" \
     "$([ "$engine_ok" -eq 1 ] && echo true || echo false)" \
     "$node_ok" "$want_node" "$have_node" "$deps_ok" "$runtime_ok" "$env_ok" \
-    "$jdk_home" "$ghidra_home" "$pwntools_python"
+    "$jdk_home" "$jadx_jar" "$ghidra_home" "$pwntools_python"
 fi
 
 if [ "$MODE" = "check" ]; then
@@ -109,6 +118,7 @@ if [ "$MODE" = "check" ]; then
     status_line dependencies "$deps_ok" "node_modules/"
     status_line runtime "$runtime_ok" "dist/cli-runtime/cli.js"
     status_line env-file "$env_ok" ".rea-sandbox.env"
+    status_line android-engines "$android_ok" "JDK 25 + apktool + jadx-headless-mcp"
     status_line deep-analysis "$engine_ok" "JDK 25 + Ghidra (optional)"
     echo
     if [ "$ready" -eq 1 ]; then
@@ -125,7 +135,7 @@ if [ "$MODE" = "check" ]; then
 fi
 
 needs_work=0
-[ "$ready" -eq 1 ] || needs_work=1
+[ "$ready" -eq 1 ] && [ "$android_ok" -eq 1 ] || needs_work=1
 case "$PASSTHROUGH" in
   *--with-native*) [ "$engine_ok" -eq 1 ] || needs_work=1 ;;
 esac
