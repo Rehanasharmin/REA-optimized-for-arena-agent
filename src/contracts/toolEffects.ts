@@ -133,6 +133,7 @@ export const TOOL_EFFECTS: Readonly<Record<string, ToolEffects>> = {
   inspect_gpu_code_objects: evidence,
   inspect_rust_binary: evidence,
   inspect_apk_signature: evidence,
+  inspect_hermes_bytecode: evidence,
   inspect_python_pyc: evidence,
   inspect_erlang_beam: evidence,
   inspect_sqlite_database: effects({

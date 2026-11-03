@@ -11,7 +11,12 @@ import {
 } from "../artifactInventoryEvidence.js";
 import { digestSchema, prefixedDigestSchema } from "../digests.js";
 import { digestCanonicalValue } from "../canonicalDigest.js";
-import { nativeRuntimeConvention } from "../nativeConvention.js";
+import {
+  isHarmonyJavaScriptBundlePath,
+  isReactNativeBundleConventionPath,
+  nativeRuntimeConvention,
+  uniqueComponentsByPath,
+} from "../nativeConvention.js";
 import {
   projectedBridgeCandidateSchema,
   projectedComponentSchema,
@@ -98,7 +103,7 @@ export const projectHarmonyInventory = (
   const manifests = classifyManifests(fileEntries);
   const classified = classify(all, manifests.components);
   const bridgeProjection = bridgeCandidates(
-    classified.bytecode,
+    uniqueComponentsByPath([...classified.bytecode, ...classified.javascript]),
     classified.native_libraries,
   );
   const limitations = [
@@ -212,7 +217,7 @@ const classify = (all: readonly Component[], manifests: Component[]) => ({
   ),
   javascript: all.filter(
     ({ path, format }) =>
-      format === "javascript-bundle" || /\.(?:m?js|cjs)$/iu.test(path),
+      format === "javascript-bundle" || isHarmonyJavaScriptBundlePath(path),
   ),
   signing: all.filter(({ path }) =>
     /^META-INF\/[^/]+\.(?:p7b|sig|cer|crt|pem|provision|rsa|dsa|ec)$/iu.test(
@@ -235,6 +240,12 @@ const runtimeFamilies = (
   if (components.bytecode.length > 0) families.add("ark");
   if (all.some(({ format }) => format === "elf")) families.add("native");
   if (components.javascript.length > 0) families.add("javascript");
+  if (
+    components.javascript.some(({ path }) =>
+      isReactNativeBundleConventionPath(path),
+    )
+  )
+    families.add("react-native");
   for (const { path } of all) {
     const convention = nativeRuntimeConvention(path);
     if (convention !== null) families.add(convention);

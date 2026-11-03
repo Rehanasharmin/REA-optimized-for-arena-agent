@@ -11,7 +11,12 @@ import {
 } from "../artifactInventoryEvidence.js";
 import { digestSchema, prefixedDigestSchema } from "../digests.js";
 import { digestCanonicalValue } from "../canonicalDigest.js";
-import { nativeRuntimeConvention } from "../nativeConvention.js";
+import {
+  isAndroidJavaScriptBundlePath,
+  isReactNativeBundleConventionPath,
+  nativeRuntimeConvention,
+  uniqueComponentsByPath,
+} from "../nativeConvention.js";
 import {
   projectedBridgeCandidateSchema,
   projectedComponentSchema,
@@ -104,7 +109,11 @@ export const projectAndroidInventory = (
   );
   const classified = classify(all);
   const bridgeProjection = bridgeCandidates(
-    [...classified.dex, ...classified.jvm_classes],
+    uniqueComponentsByPath([
+      ...classified.dex,
+      ...classified.jvm_classes,
+      ...classified.javascript,
+    ]),
     classified.native_libraries,
   );
   const components = classified;
@@ -175,7 +184,10 @@ const classify = (all: readonly Component[]) => ({
     ({ path, format }) =>
       format === "elf" || /(?:^|\/)lib\/[^/]+\/[^/]+\.so$/iu.test(path),
   ),
-  javascript: all.filter(({ format }) => format === "javascript-bundle"),
+  javascript: all.filter(
+    ({ path, format }) =>
+      format === "javascript-bundle" || isAndroidJavaScriptBundlePath(path),
+  ),
   signing: all.filter(({ path }) => isV1SignatureMetadataName(path)),
 });
 
@@ -189,8 +201,13 @@ const runtimeFamilies = (
   if (components.dex.length > 0) families.add("dalvik-art");
   if (components.jvm_classes.length > 0) families.add("java-kotlin");
   if (all.some(({ format }) => format === "elf")) families.add("native");
-  if (all.some(({ format }) => format === "javascript-bundle"))
-    families.add("javascript");
+  if (components.javascript.length > 0) families.add("javascript");
+  if (
+    components.javascript.some(({ path }) =>
+      isReactNativeBundleConventionPath(path),
+    )
+  )
+    families.add("react-native");
   for (const { path } of components.native_libraries) {
     const convention = nativeRuntimeConvention(path);
     if (convention !== null) families.add(convention);

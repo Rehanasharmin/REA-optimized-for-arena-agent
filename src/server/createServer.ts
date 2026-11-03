@@ -13,6 +13,7 @@ import { registerCaptureTools } from "./registerCaptureTools.js";
 import { registerSignalTools } from "./registerSignalTools.js";
 import { registerWasmTools } from "./registerWasmTools.js";
 import { registerApkSignatureTools } from "./registerApkSignatureTools.js";
+import { registerHermesTools } from "./registerHermesTools.js";
 import { snapshotEnvironment } from "../process/snapshotEnvironment.js";
 import { captureProviderEnvironment } from "./providerEnvironment.js";
 import { createByteEntropyService } from "../composition/binaryDiagnostics.js";
@@ -220,6 +221,7 @@ export const createServer = (
     fridaInstrumentation,
     wasmArtifact,
     apkSignature,
+    hermesBytecode,
     packetCapture,
     signalRecording,
     webRuntime,
@@ -582,6 +584,13 @@ export const createServer = (
         recordEvidence,
         analysisAdmission,
         evidenceById,
+      );
+      registerHermesTools(
+        server,
+        hermesBytecode,
+        toolLogger,
+        recordEvidence,
+        analysisAdmission,
       );
       registerSqliteTools(
         server,

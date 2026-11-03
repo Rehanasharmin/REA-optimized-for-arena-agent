@@ -8,6 +8,7 @@ export const CLI_COMMANDS = Object.freeze({
   compareWasmInterfaces: "compare-wasm-interfaces",
   inspectWasmArtifact: "inspect-wasm-artifact",
   inspectApkSignature: "inspect-apk-signature",
+  inspectHermesBytecode: "inspect-hermes-bytecode",
   inspectSqliteDatabase: "inspect-sqlite-database",
   inspectEvmInterface: "inspect-evm-interface",
   inspectWebNetworkCapture: "inspect-web-network-capture",
