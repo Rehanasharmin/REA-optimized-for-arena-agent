@@ -143,7 +143,7 @@ export const ANDROID_TOOL_CONTRACTS = [
     name: "inspect_android_method",
     ...toolContractMetadata("inspect_android_method"),
     description:
-      "Decompile one Android method with smali fallback. Requires explicit overload_index when multiple methods share a name. Reports its DEX prototype, representation, fallback markers and source truncation; display signatures may be aliases. Optional mapping_path adds R8/ProGuard mapped names for the class and selected method without replacing observed names. Prefer detail summary to retain complete Evidence and return the selected body and annotations without repeating raw class metadata. Omitted or complete detail preserves complete inline Evidence.",
+      "Decompile one Android method with smali fallback. Requires explicit overload_index when multiple methods share a name. Reports its DEX prototype, representation, fallback markers and source truncation; display signatures may be aliases. Set include_invocations to opt into bounded direct DEX method-reference INVOKE_* sites with code-unit offsets, raw method identities and explicit coverage. invoke-custom is outside this method-reference scope; virtual dispatch, reflection, JNI and runtime targets are not resolved. Optional mapping_path adds R8/ProGuard mapped names for the class and selected method without replacing observed names. Prefer detail summary to retain complete Evidence and return the selected body and annotations without repeating raw class metadata. Omitted or complete detail preserves complete inline Evidence.",
     kind: "android-provider",
     inputSchema: androidSymbolInspectionInputSchemas.inspect_android_method,
     outputSchema: evidenceResultOf(
@@ -159,6 +159,15 @@ export const ANDROID_TOOL_CONTRACTS = [
           path: "/tmp/Example.apk",
           class_name: "example.MainActivity",
           method_name: "onCreate",
+        },
+      },
+      {
+        title: "Include bounded outgoing DEX method-reference invoke sites",
+        input: {
+          path: "/tmp/Example.apk",
+          class_name: "example.MainActivity",
+          method_name: "onCreate",
+          include_invocations: true,
         },
       },
     ],

@@ -227,7 +227,8 @@ export const registerAndroidCommands = (
       ),
   });
   cli.command(CLI_COMMANDS.inspectAndroidMethod, {
-    description: "Decompile one APK method with explicit overload selection",
+    description:
+      "Decompile one APK method with explicit overload selection; optionally include bounded direct DEX call sites",
     args: z.object({
       path,
       className,
@@ -240,6 +241,12 @@ export const registerAndroidCommands = (
           "Explicit zero-based index among same-name methods; required when ambiguous",
         ),
       mappingPath,
+      includeInvocations: z
+        .boolean()
+        .optional()
+        .describe(
+          "Include bounded raw DEX method-reference INVOKE_* sites with offsets and target identities; invoke-custom is excluded",
+        ),
       ...analysisEvidenceDeliveryOptions,
     }),
     run: ({ args, options }) =>
@@ -254,6 +261,9 @@ export const registerAndroidCommands = (
           ...(options.overloadIndex === undefined
             ? {}
             : { overload_index: options.overloadIndex }),
+          ...(options.includeInvocations === true
+            ? { include_invocations: true }
+            : {}),
         },
         args.path,
         options,

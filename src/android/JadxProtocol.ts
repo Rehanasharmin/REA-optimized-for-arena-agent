@@ -134,6 +134,29 @@ export const jadxExternalReferenceSummarySchema = z.object({
   observed_method_count: count,
   prototypes: z.array(jadxMethodMetadataSchema).min(1),
 });
+const jadxMethodInvocationSchema = z.object({
+  target_class_name: z.string().min(1),
+  target_raw_class_name: z.string().min(1),
+  target_method_name: z.string().min(1),
+  target_dex_descriptor: dexDescriptorSchema,
+  target_raw_method_id: z.string().min(1),
+  dex_entry: z.string().min(1),
+  source_raw_method_id: z.string().min(1),
+  dex_code_unit_offset: count,
+  dex_method_index: count,
+  opcode: z.string().regex(/^INVOKE_/u),
+});
+const jadxMethodInvocationCoverageSchema = z.object({
+  scope: z.literal("method_reference_invoke_opcodes"),
+  status: z.enum(["complete", "partial", "unavailable"]),
+  total_sites: count,
+  retained_sites: count,
+  max_sites: z.int().positive(),
+  json_budget_bytes: z.int().positive(),
+  limit_reason: z
+    .enum(["site_limit", "byte_limit", "code_unavailable"])
+    .nullable(),
+});
 export const jadxMethodSchema = z.object({
   class_name: z.string(),
   method_name: z.string(),
@@ -145,6 +168,8 @@ export const jadxMethodSchema = z.object({
   fell_back: z.boolean(),
   markers: z.array(z.string()),
   body: z.string(),
+  invocations: z.array(jadxMethodInvocationSchema).optional(),
+  invocation_coverage: jadxMethodInvocationCoverageSchema.optional(),
 });
 export const jadxXrefsSchema = z.object({
   target: z.string(),

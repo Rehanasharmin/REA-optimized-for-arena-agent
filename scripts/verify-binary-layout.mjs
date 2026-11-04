@@ -52,6 +52,7 @@ for (const command of [
   "gcc",
   "ld",
   "strip",
+  "readelf",
   "/usr/bin/prlimit",
   strace,
   ...ELF32_TOOLCHAINS.flatMap(([prefix]) => [
@@ -99,6 +100,104 @@ const source = fileURLToPath(
 const highSource = fileURLToPath(
   new URL("./fixtures/binary-layout-high.S", import.meta.url),
 );
+const createAarch64RelocatableElf = () => {
+  const file = Buffer.alloc(584);
+  file.set([0x7f, 0x45, 0x4c, 0x46], 0);
+  file[4] = 2; // ELFCLASS64
+  file[5] = 1; // ELFDATA2LSB
+  file[6] = 1; // EV_CURRENT
+  file.writeUInt16LE(1, 16); // ET_REL
+  file.writeUInt16LE(183, 18); // EM_AARCH64
+  file.writeUInt32LE(1, 20); // EV_CURRENT
+  file.writeBigUInt64LE(200n, 40); // Section-header table offset
+  file.writeUInt16LE(64, 52); // ELF header size
+  file.writeUInt16LE(56, 54); // ELF64 program-header entry size
+  file.writeUInt16LE(64, 58); // ELF64 section-header entry size
+  file.writeUInt16LE(6, 60); // Section count including SHT_NULL
+  file.writeUInt16LE(5, 62); // .shstrtab section index
+
+  // One AArch64 CALL26 relocation to an undefined external function.
+  file.fill(0, 64, 72); // .text, two instruction-sized words
+  file.writeBigUInt64LE(4n, 72); // r_offset
+  file.writeBigUInt64LE((1n << 32n) | 283n, 80); // ELF64 r_info: sym=1, type=283
+  file.writeBigInt64LE(-4n, 88); // RELA addend
+  Buffer.concat([
+    Buffer.from([0]),
+    Buffer.from("callee", "ascii"),
+    Buffer.from([0]),
+  ]).copy(file, 96); // .strtab
+  file.writeUInt32LE(1, 128); // Elf64_Sym.st_name
+  file[132] = 0x12; // STB_GLOBAL | STT_FUNC
+  file.writeUInt16LE(0, 134); // SHN_UNDEF
+
+  const sectionNames = Buffer.from(
+    ["", ".text", ".rela.text", ".strtab", ".symtab", ".shstrtab", ""].join(
+      String.fromCharCode(0),
+    ),
+    "ascii",
+  );
+  sectionNames.copy(file, 152); // .shstrtab
+  const nameOffset = (name) =>
+    sectionNames.indexOf(
+      Buffer.concat([Buffer.from(name, "ascii"), Buffer.from([0])]),
+    );
+  const sections = [
+    {},
+    {
+      name: ".text",
+      type: 1,
+      flags: 6,
+      offset: 64,
+      size: 8,
+      alignment: 4,
+    },
+    {
+      name: ".rela.text",
+      type: 4,
+      offset: 72,
+      size: 24,
+      link: 4,
+      info: 1,
+      alignment: 8,
+      entrySize: 24,
+    },
+    { name: ".strtab", type: 3, offset: 96, size: 8, alignment: 1 },
+    {
+      name: ".symtab",
+      type: 2,
+      offset: 104,
+      size: 48,
+      link: 3,
+      info: 1,
+      alignment: 8,
+      entrySize: 24,
+    },
+    { name: ".shstrtab", type: 3, offset: 152, size: 44, alignment: 1 },
+  ];
+  for (const [index, section] of sections.entries()) {
+    const header = 200 + index * 64;
+    file.writeUInt32LE(
+      section.name === undefined ? 0 : nameOffset(section.name),
+      header,
+    );
+    file.writeUInt32LE(section.type ?? 0, header + 4);
+    file.writeBigUInt64LE(BigInt(section.flags ?? 0), header + 8);
+    file.writeBigUInt64LE(0n, header + 16); // sh_addr
+    file.writeBigUInt64LE(BigInt(section.offset ?? 0), header + 24);
+    file.writeBigUInt64LE(BigInt(section.size ?? 0), header + 32);
+    file.writeUInt32LE(section.link ?? 0, header + 40);
+    file.writeUInt32LE(section.info ?? 0, header + 44);
+    file.writeBigUInt64LE(BigInt(section.alignment ?? 0), header + 48);
+    file.writeBigUInt64LE(BigInt(section.entrySize ?? 0), header + 56);
+  }
+  return file;
+};
+const decodeElfRelocationInfo = (hex, bits) => {
+  const info = BigInt(`0x${hex}`);
+  return bits === 32
+    ? { type: Number(info & 0xffn), symbolIndex: Number(info >> 8n) }
+    : { type: Number(info & 0xffffffffn), symbolIndex: Number(info >> 32n) };
+};
 let cases = 0;
 let bootstrapCases = 0;
 const failures = [];
@@ -260,6 +359,128 @@ try {
   );
   await client.connect(transport);
   const reports = new Map();
+  // A bounded synthetic ET_REL fixture exercises ELF64 AArch64 sections,
+  // symbols and RELA parsing without a cross-compiler or target execution.
+  // GNU readelf independently validates the fixture and supplies r_info facts.
+  const aarch64Path = join(root.path, "aarch64-relocatable");
+  const aarch64Bytes = createAarch64RelocatableElf();
+  await writeFile(aarch64Path, aarch64Bytes);
+  const { stdout: aarch64Readelf } = await execute(
+    "readelf",
+    ["-hSWsr", aarch64Path],
+    {
+      timeout: 10_000,
+      maxBuffer: 1024 * 1024,
+      env: { ...process.env, LC_ALL: "C" },
+    },
+  );
+  assert.match(aarch64Readelf, /Machine:\s+AArch64/u);
+  assert.match(aarch64Readelf, /R_AARCH64_CALL26/u);
+  assert.match(aarch64Readelf, /\bcallee\b/u);
+  const expectedAarch64Sections = [
+    ...aarch64Readelf.matchAll(
+      /^\s*\[\s*(\d+)\]\s+(\S+)\s+\S+\s+([0-9a-f]+)\s+([0-9a-f]+)\s+([0-9a-f]+)\s+[0-9a-f]+\s+[A-Za-z]*\s+(\d+)\s+\d+\s+\d+\s*$/gm,
+    ),
+  ]
+    .filter(([, index]) => index !== "0")
+    .map(([, index, name, address, offset, size, link]) => ({
+      index: Number(index),
+      name,
+      address: BigInt(`0x${address}`),
+      offset: BigInt(`0x${offset}`),
+      size: BigInt(`0x${size}`),
+      link: Number(link),
+    }));
+  assert.equal(expectedAarch64Sections.length, 5);
+  const aarch64Relocations = [];
+  for (const [, name, count, body] of aarch64Readelf.matchAll(
+    /^Relocation section '([^']+)' at offset 0x[0-9a-f]+ contains (\d+) entr(?:y|ies):\n((?:[^\n]+\n?)*)/gm,
+  )) {
+    const section = expectedAarch64Sections.find(
+      (candidate) => candidate.name === name,
+    );
+    assert.notEqual(section, undefined);
+    const rows = [...body.matchAll(/^\s*([0-9a-f]+)\s+([0-9a-f]+)\s+\S+/gm)];
+    assert.equal(rows.length, Number(count));
+    for (const [entryIndex, [, offset, info]] of rows.entries()) {
+      const decoded = decodeElfRelocationInfo(info, 64);
+      aarch64Relocations.push({
+        section_index: section.index,
+        entry_index: entryIndex,
+        reported_offset: BigInt(`0x${offset}`),
+        type: decoded.type,
+        symbol_table_index: section.link,
+        symbol_index: decoded.symbolIndex,
+      });
+    }
+  }
+  assert.deepEqual(aarch64Relocations, [
+    {
+      section_index: 2,
+      entry_index: 0,
+      reported_offset: 4n,
+      type: 283,
+      symbol_table_index: 4,
+      symbol_index: 1,
+    },
+  ]);
+  for (const mode of ["cli", "mcp"]) {
+    const value = await inspect(mode, aarch64Path);
+    assert.deepEqual(value.architecture, {
+      machine: "EM_AARCH64",
+      bits: 64,
+      byte_order: "little",
+    });
+    assert.equal(value.image_type, "ET_REL");
+    for (const section of expectedAarch64Sections) {
+      const reported = value.sections[section.index];
+      assert.equal(reported.name.display, section.name);
+      assert.equal(BigInt(reported.address), section.address);
+      assert.equal(BigInt(reported.offset), section.offset);
+      assert.equal(BigInt(reported.size), section.size);
+    }
+    assert.equal(value.sections.length, expectedAarch64Sections.length + 1);
+    assert.deepEqual(
+      value.relocations.map(
+        ({
+          section_index,
+          entry_index,
+          reported_offset,
+          type,
+          symbol_table_index,
+          symbol_index,
+        }) => ({
+          section_index,
+          entry_index,
+          reported_offset: BigInt(reported_offset),
+          type,
+          symbol_table_index,
+          symbol_index,
+        }),
+      ),
+      aarch64Relocations,
+      `${mode} ELF64 r_info decode differs from readelf`,
+    );
+    assert.equal(value.relocations[0].addend, "-4");
+    assert.deepEqual(value.relocations[0].target, {
+      kind: "section-offset",
+      section_index: 1,
+      offset: "0x4",
+    });
+    const callee = value.symbols.find(
+      (symbol) => symbol.name.display === "callee",
+    );
+    assert.ok(callee);
+    assert.equal(callee.table_index, 4);
+    assert.equal(callee.entry_index, 1);
+    assert.equal(callee.value_meaning, "undefined");
+    assert.equal(
+      value.artifact.sha256,
+      createHash("sha256").update(aarch64Bytes).digest("hex"),
+    );
+    assert.deepEqual(await readFile(aarch64Path), aarch64Bytes);
+    cases++;
+  }
   for (const name of [
     "protected",
     "plain",
@@ -423,16 +644,16 @@ try {
         `readelf relocation count: ${name}`,
       );
       for (const [entryIndex, [, offset, info]] of rows.entries()) {
-        // ELF32 r_info uses the low byte for type and the upper 24 bits for
-        // the symbol index. readelf has already decoded the file's byte order.
-        const decodedInfo = BigInt(`0x${info}`);
+        // readelf has decoded file byte order; ELF32 packs a 24-bit symbol
+        // index above an 8-bit type, while ELF64 uses two 32-bit fields.
+        const decodedInfo = decodeElfRelocationInfo(info, 32);
         expectedRelocations.push({
           section_index: section.index,
           entry_index: entryIndex,
           reported_offset: BigInt(`0x${offset}`),
-          type: Number(decodedInfo & 0xffn),
+          type: decodedInfo.type,
           symbol_table_index: section.link,
-          symbol_index: Number(decodedInfo >> 8n),
+          symbol_index: decodedInfo.symbolIndex,
         });
       }
     }
@@ -1123,7 +1344,7 @@ try {
       }
     }
   }
-  const unsupported = Buffer.from(object);
+  const unsupportedAarch64 = Buffer.from(object);
   const originalSectionOffset = Number(object.readBigUInt64LE(40));
   const sectionSize = object.readUInt16LE(58);
   const originalSectionCount = object.readUInt16LE(60);
@@ -1312,7 +1533,8 @@ try {
       }
     }
   }
-  unsupported.writeUInt16LE(183, 18);
+  unsupportedAarch64[5] = 2; // ELF big-endian
+  unsupportedAarch64.writeUInt16BE(183, 18);
   const core = Buffer.from(object);
   core.writeUInt16LE(4, 16);
   for (const [name, bytes, category] of [
@@ -1337,7 +1559,7 @@ try {
       "invalid_input",
     ],
     ["undersized-program-header", undersizedProgramHeader, "invalid_input"],
-    ["arm64", unsupported, "unsupported_target"],
+    ["aarch64-big-endian", unsupportedAarch64, "unsupported_target"],
     ["core", core, "unsupported_target"],
   ]) {
     const path = join(root.path, name);

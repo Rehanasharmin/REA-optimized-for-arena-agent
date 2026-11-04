@@ -88,11 +88,13 @@ const tasks = [
       path,
       fixture.class_name,
       fixture.method_name,
+      "--include-invocations",
     ],
     input: {
       path,
       class_name: fixture.class_name,
       method_name: fixture.method_name,
+      include_invocations: true,
     },
   },
   {
@@ -266,6 +268,34 @@ assert.equal(method.source.status, "complete");
 assert.ok(method.source.text.includes("getIntent()"));
 assert.ok(method.source.text.includes("setListAdapter"));
 assert.equal(method.method.dex_descriptor, "(Landroid/os/Bundle;)V");
+assert.ok(method.invocations.length > 0);
+assert.deepEqual(method.invocation_coverage, {
+  scope: "method_reference_invoke_opcodes",
+  status: "complete",
+  total_sites: method.invocations.length,
+  retained_sites: method.invocations.length,
+  max_sites: 1024,
+  json_budget_bytes: 1024 * 1024,
+  limit_reason: null,
+});
+assert.ok(
+  method.invocations.some((site) => site.target_method_name === "getIntent"),
+);
+assert.ok(
+  method.invocations.some(
+    (site) => site.target_method_name === "setListAdapter",
+  ),
+);
+for (const site of method.invocations) {
+  assert.ok(
+    site.source_raw_method_id.endsWith("->onCreate(Landroid/os/Bundle;)V"),
+  );
+  assert.ok(site.target_raw_method_id.length > 0);
+  assert.match(site.dex_entry, /(?:^|\/)classes(?:\d+)?\.dex$/u);
+  assert.ok(Number.isSafeInteger(site.dex_code_unit_offset));
+  assert.ok(Number.isSafeInteger(site.dex_method_index));
+  assert.match(site.opcode, /^INVOKE_/u);
+}
 const references = cliResults.get("trace_android_references").normalized_result;
 assert.ok(references.total > 0);
 assert.ok(

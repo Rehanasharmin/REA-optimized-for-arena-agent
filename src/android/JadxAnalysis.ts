@@ -397,12 +397,14 @@ const inspectMethod = async (
       "overload_index",
       `Index ${index} is outside the ${candidates.length} matching overloads.`,
     );
+  const includeInvocations = request.input.include_invocations === true;
   const body = jadxMethodSchema.parse(
     await tools.json("get_method_body", {
       class_name: request.input.class_name,
       method_name: request.input.method_name,
       overload_index: index,
       smali_fallback: true,
+      include_invocations: includeInvocations,
     }),
   );
   if (
@@ -416,6 +418,22 @@ const inspectMethod = async (
       request.operation,
       "JADX returned a different method or overload inventory",
     );
+  const invocationFacts = (() => {
+    if (!includeInvocations) return {};
+    const sites = body.invocations;
+    const coverage = body.invocation_coverage;
+    if (
+      sites === undefined ||
+      coverage === undefined ||
+      coverage.retained_sites !== sites.length ||
+      coverage.total_sites < coverage.retained_sites
+    )
+      throw new AnalysisOutputError(
+        request.operation,
+        "JADX omitted or contradicted the selected method invocation inventory",
+      );
+    return { invocations: sites, invocation_coverage: coverage };
+  })();
   return androidResultSchemas.inspect_android_method.parse({
     engine,
     class_name: summary.full_name,
@@ -426,6 +444,7 @@ const inspectMethod = async (
     fell_back: body.fell_back,
     markers: body.markers,
     source: normalizeJadxText(body.body),
+    ...invocationFacts,
     ...mappingOf(mapping, () => [
       classQuery(summary),
       ...methodQueries(summary).filter(
