@@ -658,6 +658,10 @@ class ReaJadxBridge {
   // JSON-RPC/CallToolResult envelope and generated numeric request id, and
   // account for JSON text being escaped again inside TextContent.
   private static final int MAX_XREF_TEXT_BYTES = 8 * 1024 * 1024 - 1024;
+  // Method inspection can opt into a structured outgoing call-site inventory.
+  // Keep it small enough to coexist with the bounded source and MCP envelopes.
+  private static final int MAX_METHOD_INVOKE_SITES = 1024;
+  private static final long MAX_METHOD_INVOKE_TEXT_BYTES = 1024L * 1024L;
   // Leave room for the prototype reply, reference reply, retained raw calls,
   // normalized Evidence and their text/structured MCP copies, not just one frame.
   private static final int MAX_EXTERNAL_XREF_BYTES = MAX_XREF_TEXT_BYTES / 8;
@@ -683,12 +687,14 @@ class ReaJadxBridge {
     }
   }
   private record DirectInvokes(List<Map<String, Object>> sites, boolean exhaustive) {}
+  private record MethodInvocations(List<Map<String, Object>> sites,
+      Map<String, Object> coverage) {}
 
   @FunctionalInterface private interface InvokeVisitor {
     void accept(MethodInfo target, int offset, int index, Opcode opcode);
   }
 
-  /** Decode raw invoke identity once at the shared bridge boundary, without generating source. */
+  /** Decode DEX method-reference invokes without source generation; call-site invokes are excluded. */
   private static void visitInvokes(MethodNode node, InvokeVisitor visitor) {
     checkNativeInterrupted();
     ICodeReader code = node.getCodeReader();
@@ -698,7 +704,10 @@ class ReaJadxBridge {
       insn.decode();
       if (insn.getIndexType() != InsnIndexType.METHOD_REF) return;
       Opcode opcode = insn.getOpcode();
-      if (!opcode.name().startsWith("INVOKE_")) return;
+      String opcodeName = opcode.name();
+      if (!opcodeName.startsWith("INVOKE_")
+          || opcodeName.equals("INVOKE_CUSTOM")
+          || opcodeName.equals("INVOKE_CUSTOM_RANGE")) return;
       IMethodRef ref = insn.getIndexAsMethod();
       ref.load();
       visitor.accept(MethodInfo.fromRef(node.root(), ref), insn.getOffset(), insn.getIndex(), opcode);
@@ -738,6 +747,72 @@ class ReaJadxBridge {
       else exhaustive[0] = false;
     });
     return new DirectInvokes(sites, exhaustive[0]);
+  }
+
+  /** Bounded DEX method-reference INVOKE_* inventory for one method; no source decompilation. */
+  private static MethodInvocations methodInvocations(MethodNode source) {
+    if (source.getCodeReader() == null) {
+      return new MethodInvocations(List.of(), Map.of(
+          "scope", "method_reference_invoke_opcodes", "status", "unavailable",
+          "total_sites", 0, "retained_sites", 0,
+          "max_sites", MAX_METHOD_INVOKE_SITES,
+          "json_budget_bytes", MAX_METHOD_INVOKE_TEXT_BYTES,
+          "limit_reason", "code_unavailable"));
+    }
+    List<Map<String, Object>> sites = new ArrayList<>();
+    long[] total = {0};
+    String[] limitReason = {null};
+    // Reserve the coverage object, array framing, commas and parent field names.
+    InvokeBudget budget = new InvokeBudget(MAX_METHOD_INVOKE_TEXT_BYTES - 4096L);
+    String dexEntry = source.getInputFileName();
+    String sourceRawMethodId = source.getMethodInfo().getRawFullId();
+    if (dexEntry == null || dexEntry.isEmpty() || sourceRawMethodId == null
+        || sourceRawMethodId.isEmpty())
+      throw new IllegalArgumentException("JADX omitted raw DEX invocation provenance");
+    visitInvokes(source, (target, offset, index, opcode) -> {
+      total[0]++;
+      if (limitReason[0] != null) return;
+      if (sites.size() >= MAX_METHOD_INVOKE_SITES) {
+        limitReason[0] = "site_limit";
+        return;
+      }
+      String name = target.getName();
+      String shortId = target.getShortId();
+      if (name == null || shortId == null || !shortId.startsWith(name)
+          || shortId.length() == name.length())
+        throw new IllegalArgumentException("JADX returned an invalid raw DEX method descriptor");
+      String targetRawMethodId = target.getRawFullId();
+      String targetClassName = target.getDeclClass().getFullName();
+      String targetRawClassName = target.getDeclClass().getRawName();
+      if (targetRawMethodId == null || targetRawMethodId.isEmpty()
+          || targetClassName == null || targetClassName.isEmpty()
+          || targetRawClassName == null || targetRawClassName.isEmpty())
+        throw new IllegalArgumentException("JADX omitted raw DEX invocation provenance");
+      Map<String, Object> site = Map.of(
+          "target_class_name", targetClassName,
+          "target_raw_class_name", targetRawClassName,
+          "target_method_name", name,
+          "target_dex_descriptor", shortId.substring(name.length()),
+          "target_raw_method_id", targetRawMethodId,
+          "dex_entry", dexEntry,
+          "source_raw_method_id", sourceRawMethodId,
+          "dex_code_unit_offset", offset,
+          "dex_method_index", index,
+          "opcode", opcode.name());
+      if (budget.admit(site)) sites.add(site);
+      else limitReason[0] = "byte_limit";
+    });
+    String reason = limitReason[0];
+    Map<String, Object> coverage = new LinkedHashMap<>();
+    coverage.put("scope", "method_reference_invoke_opcodes");
+    coverage.put("status", reason == null ? "complete" : "partial");
+    coverage.put("total_sites", total[0]);
+    coverage.put("retained_sites", sites.size());
+    coverage.put("max_sites", MAX_METHOD_INVOKE_SITES);
+    coverage.put("json_budget_bytes", MAX_METHOD_INVOKE_TEXT_BYTES);
+    if (reason == null) coverage.put("limit_reason", JsonNull.INSTANCE);
+    else coverage.put("limit_reason", reason);
+    return new MethodInvocations(List.copyOf(sites), coverage);
   }
 
   private List<ClassSnapshot> sourceClasses() {
@@ -927,13 +1002,21 @@ class ReaJadxBridge {
       int index = integer(args, "overload_index", 0);
       if (index >= overloads.size()) throw new InputFailure("overload_index", "overload_index out of range: " + index);
       JavaMethod method = method(cls, overloads.get(index));
+      MethodInvocations invocations = flag(args, "include_invocations")
+          ? methodInvocations(method.getMethodNode()) : null;
       JadxSession.SmartCode code = methodBody(current, cls, overloads.get(index), method);
-      return json(Map.of("class_name", cls.summary().get("full_name"),
+      Map<String, Object> result = new LinkedHashMap<>(Map.of(
+          "class_name", cls.summary().get("full_name"),
           "method_name", overloads.get(index).name(), "full_name", method.getFullName(),
           "dex_descriptor", overloads.get(index).summary().get("dex_descriptor"),
           "overload_index", index, "overload_count", overloads.size(),
           "mode", code.getKind(), "fell_back", code.getFellBack(),
           "markers", code.getMarkers(), "body", code.getText()));
+      if (invocations != null) {
+        result.put("invocations", invocations.sites());
+        result.put("invocation_coverage", invocations.coverage());
+      }
+      return json(result);
     }
     List<JavaNode> uses;
     String target = (String) cls.summary().get("full_name");
@@ -1057,6 +1140,9 @@ class ReaJadxBridge {
       if (name.equals("get_class_summary")) properties.put("dex_static_values",
           new kotlinx.serialization.json.JsonObject(Map.of(
               "type", kotlinx.serialization.json.JsonElementKt.JsonPrimitive("boolean"))));
+      if (name.equals("get_method_body")) properties.put("include_invocations",
+          new kotlinx.serialization.json.JsonObject(Map.of(
+              "type", kotlinx.serialization.json.JsonElementKt.JsonPrimitive("boolean"))));
       if (name.equals("get_class_summary") || name.equals("get_xrefs_to_method"))
         properties.put("reference_target", new kotlinx.serialization.json.JsonObject(Map.of(
             "type", kotlinx.serialization.json.JsonElementKt.JsonPrimitive("boolean"))));
@@ -1066,7 +1152,7 @@ class ReaJadxBridge {
       String description = switch (name) {
         case "list_classes" -> "Pages of case-sensitive matching top-level class names; offset and next_offset are inventory positions, limit bounds matching rows. Omitted or empty query inventories all names.";
         case "get_class_summary" -> "Parsed member metadata for one exact class name; no source generation. Set dex_static_values to include encoded static final field values.";
-        case "get_method_body" -> "Source for an exact class and stable same-name overload index; static initializers use smali to preserve folded field initialization.";
+        case "get_method_body" -> "Source for an exact class and stable same-name overload index; static initializers use smali to preserve folded field initialization. Set include_invocations to return bounded DEX method-reference INVOKE_* sites with raw identities and code-unit offsets; invoke-custom is outside this scope, and dynamic dispatch, reflection and runtime targets are not resolved.";
         default -> "Complete static using-node inventory for an exact class or selected method overload; one node may contain multiple invoke instructions, and source lines are unresolved.";
       };
       registerBridgeTool(server, bridge, name,

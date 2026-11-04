@@ -43,6 +43,8 @@ const cases = [
     fell_back: false,
     markers: [marker],
     witnesses: [],
+    include_invocations:
+      marker === "native_method" && method_name === "readBuffer",
   })),
   {
     class_name: "fixture.MergedMethod",
@@ -111,6 +113,21 @@ export const verifyAndroidMethodBodies = async ({
     assert.equal(result.representation, scenario.representation);
     assert.equal(result.fell_back, scenario.fell_back);
     assert.deepEqual(result.markers, scenario.markers);
+    if (scenario.include_invocations) {
+      assert.deepEqual(result.invocations, []);
+      assert.deepEqual(result.invocation_coverage, {
+        scope: "method_reference_invoke_opcodes",
+        status: "unavailable",
+        total_sites: 0,
+        retained_sites: 0,
+        max_sites: 1024,
+        json_budget_bytes: 1024 * 1024,
+        limit_reason: "code_unavailable",
+      });
+    } else {
+      assert.equal(result.invocations, undefined);
+      assert.equal(result.invocation_coverage, undefined);
+    }
     if (scenario.body_status === "not_available")
       assert.equal(result.source.text, "");
     assert.equal(result.source.status, "complete");
@@ -133,6 +150,7 @@ export const verifyAndroidMethodBodies = async ({
         scenario.method_name,
         "--overload-index",
         String(scenario.overload_index),
+        ...(scenario.include_invocations ? ["--include-invocations"] : []),
         "--format",
         "json",
       ],
@@ -171,6 +189,9 @@ export const verifyAndroidMethodBodies = async ({
             class_name: scenario.class_name,
             method_name: scenario.method_name,
             overload_index: scenario.overload_index,
+            ...(scenario.include_invocations
+              ? { include_invocations: true }
+              : {}),
           },
         },
         { timeout: 150_000 },

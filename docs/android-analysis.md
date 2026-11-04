@@ -223,6 +223,7 @@ rea inspect-android-package /path/Example.apk
 rea search-android-classes /path/Example.apk MainActivity
 rea inspect-android-class /path/Example.apk example.MainActivity
 rea inspect-android-method /path/Example.apk example.MainActivity onCreate
+rea inspect-android-method /path/Example.apk example.MainActivity onCreate --include-invocations
 rea inspect-android-method /path/Example.apk example.MainActivity select --overload-index 1
 rea trace-android-references /path/Example.apk example.MainActivity
 rea trace-android-references /path/Example.apk example.MainActivity --method-name onCreate
@@ -241,7 +242,8 @@ Every request includes `path`. Class/method operations use `class_name`,
     "path": "/path/Example.apk",
     "class_name": "example.MainActivity",
     "method_name": "select",
-    "overload_index": 1
+    "overload_index": 1,
+    "include_invocations": true
   }
 }
 ```
@@ -251,6 +253,26 @@ method request rather than silently selecting the first match. Method reference
 queries accept the same `overload_index`; the bridge resolves the selected
 method node and the result reports its index and displayed signature. These
 indices are tied to the current artifact and engine, not stable across builds.
+
+`inspect_android_method` normally returns its selected body and no outgoing-site
+array. Set `include_invocations: true` (or CLI `--include-invocations`) to also
+retain a bounded list of direct DEX method-reference invoke instructions. Each
+site includes the DEX entry, the selected caller's raw method ID, the target's
+display and raw class/method identities, DEX descriptor, method-reference index,
+opcode and code-unit offset. Use the raw IDs and descriptor as identities; JADX
+display names may reflect aliases.
+
+`invocation_coverage.scope` is `method_reference_invoke_opcodes`; `complete`
+means every decodable `INVOKE_*` instruction whose index is a DEX method
+reference was retained. `total_sites` counts that scope and
+`retained_sites` matches the returned array. The default bounds are 1,024 sites
+and 1 MiB of conservatively budgeted JSON text. A reached bound reports
+`status: "partial"` with `limit_reason: "site_limit"` or `"byte_limit"` and the
+total number observed; absent method code reports `status: "unavailable"` and
+`code_unavailable`. An empty complete list means no method-reference invoke
+instruction was observed. `invoke-custom` call sites are outside this scope.
+This is static instruction evidence, not a resolved call graph: virtual/interface
+dispatch, reflection, method handles, JNI and runtime targets are not inferred.
 
 Method reference queries also accept an external class, such as
 `android.app.NotificationManager --method-name notify`, when the APK directly
@@ -337,8 +359,9 @@ export it with `export_evidence_bundle` or read its summary again through
 the portable bundle path. Omitted or `complete` detail preserves complete inline
 Evidence. Search and reference operations retain their existing contracts.
 Symbol summary views admit at most **1 MiB**, including view context. An admitted
-method's source can already consume that amount; a larger combined summary
-fails explicitly instead of silently truncating facts. MCP refusal includes
+method's source and any opted-in invocation sites can already consume that
+amount; a larger combined summary fails explicitly instead of silently
+truncating facts. MCP refusal includes
 the retained parent ID. Select complete detail, or inspect one method rather
 than a whole class, when the requested summary does not fit.
 

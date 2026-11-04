@@ -8,11 +8,12 @@ ordinary binary inspection use the same modular capability.
 
 ## Bring your own engine
 
-Real verification covers **Linux x64** hosts and **EXEC/DYN/REL** objects in
-these profiles: ELF64 x86-64, ELF32 i386, ELF32 little-endian ARM and ELF32
-little- or big-endian MIPS. Other machines, classes and byte orders, including
-AArch64 and big-endian ARM, return `unsupported_target`. Provide an absolute
-Python executable whose environment already contains unchanged pwntools 4.15.0,
+On a **Linux x64** host, the layout profile accepts **EXEC/DYN/REL** objects
+with ELF64 x86-64, ELF64 little-endian AArch64, ELF32 i386, ELF32 little-endian
+ARM and ELF32 little- or big-endian MIPS. Other machines, classes and byte
+orders, including big-endian AArch64 and big-endian ARM, return
+`unsupported_target`. Provide an absolute Python executable whose environment
+already contains unchanged pwntools 4.15.0,
 pyelftools 0.33 and Unicorn 2.1.2:
 
 ```sh

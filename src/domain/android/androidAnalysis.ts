@@ -55,6 +55,12 @@ export const androidInputSchemas = {
       .describe(
         "Explicit index among same-name methods; required when ambiguous",
       ),
+    include_invocations: z
+      .boolean()
+      .optional()
+      .describe(
+        "When true, include bounded raw DEX method-reference INVOKE_* sites with code-unit offsets and target identities; invoke-custom is excluded",
+      ),
   }),
   trace_android_references: z.strictObject({
     ...classTarget,
@@ -202,6 +208,80 @@ const method = z.strictObject({
   is_constructor: z.boolean(),
   dex_descriptor: dexDescriptorSchema,
 });
+const androidMethodInvocation = z.strictObject({
+  target_class_name: z
+    .string()
+    .min(1)
+    .describe("JADX display class name for the referenced method"),
+  target_raw_class_name: z
+    .string()
+    .min(1)
+    .describe("Original DEX class identity, normally in Lpackage/Class; form"),
+  target_method_name: z
+    .string()
+    .min(1)
+    .describe("JADX display name for the referenced method"),
+  target_dex_descriptor: dexDescriptorSchema.describe(
+    "Original DEX method descriptor; use with the raw class/method identity",
+  ),
+  target_raw_method_id: z
+    .string()
+    .min(1)
+    .describe("Original DEX owner, method name and descriptor identity"),
+  dex_entry: z
+    .string()
+    .min(1)
+    .describe("DEX entry inside the APK that contains this instruction"),
+  source_raw_method_id: z
+    .string()
+    .min(1)
+    .describe("Original DEX identity of the inspected caller method"),
+  dex_code_unit_offset: z
+    .int()
+    .nonnegative()
+    .describe("Instruction offset in 16-bit DEX code units"),
+  dex_method_index: z
+    .int()
+    .nonnegative()
+    .describe("DEX method-reference index encoded by this instruction"),
+  opcode: z
+    .string()
+    .regex(/^INVOKE_/u)
+    .describe("Raw DEX invoke opcode; does not resolve runtime dispatch"),
+});
+const androidMethodInvocationCoverage = z.strictObject({
+  scope: z
+    .literal("method_reference_invoke_opcodes")
+    .describe(
+      "Only INVOKE_* instructions with DEX method references are counted",
+    ),
+  status: z
+    .enum(["complete", "partial", "unavailable"])
+    .describe(
+      "Whether the declared method-reference instruction scope was retained",
+    ),
+  total_sites: z
+    .int()
+    .nonnegative()
+    .describe(
+      "Total method-reference invoke instructions observed, including omitted sites",
+    ),
+  retained_sites: z
+    .int()
+    .nonnegative()
+    .describe("Number of entries retained in invocations"),
+  max_sites: z.int().positive().describe("Maximum retained instruction sites"),
+  json_budget_bytes: z
+    .int()
+    .positive()
+    .describe("Conservative JSON-text budget for the invocation inventory"),
+  limit_reason: z
+    .enum(["site_limit", "byte_limit", "code_unavailable"])
+    .nullable()
+    .describe(
+      "Why the inventory is partial or unavailable; null when complete",
+    ),
+});
 /** Exact member selector shared with follow-up APK method inspection. */
 export const androidMethodSelectorSchema = z.strictObject({
   class_name: z.string().min(1),
@@ -271,18 +351,70 @@ export const androidResultSchemas = {
     inner_classes: z.array(z.string()),
     mapping: androidMappingReportSchema.exactOptional(),
   }),
-  inspect_android_method: z.strictObject({
-    ...common,
-    class_name: z.string(),
-    method: method,
-    overload_count: z.int().positive(),
-    representation: z.enum(["java", "smali"]),
-    body_status: z.enum(["available", "not_available"]),
-    fell_back: z.boolean(),
-    markers: z.array(z.string()),
-    source: textCoverage,
-    mapping: androidMappingReportSchema.exactOptional(),
-  }),
+  inspect_android_method: z
+    .strictObject({
+      ...common,
+      class_name: z.string(),
+      method: method,
+      overload_count: z.int().positive(),
+      representation: z.enum(["java", "smali"]),
+      body_status: z.enum(["available", "not_available"]),
+      fell_back: z.boolean(),
+      markers: z.array(z.string()),
+      source: textCoverage,
+      invocations: z.array(androidMethodInvocation).exactOptional(),
+      invocation_coverage: androidMethodInvocationCoverage.exactOptional(),
+      mapping: androidMappingReportSchema.exactOptional(),
+    })
+    .superRefine((result, context) => {
+      if (
+        (result.invocations === undefined) !==
+        (result.invocation_coverage === undefined)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["invocations"],
+          message:
+            "Invocation sites and their explicit coverage must be retained together.",
+        });
+        return;
+      }
+      const sites = result.invocations;
+      const coverage = result.invocation_coverage;
+      if (sites === undefined || coverage === undefined) return;
+      if (coverage.retained_sites !== sites.length)
+        context.addIssue({
+          code: "custom",
+          path: ["invocation_coverage", "retained_sites"],
+          message: "Retained invocation count must match the site array.",
+        });
+      if (coverage.total_sites < coverage.retained_sites)
+        context.addIssue({
+          code: "custom",
+          path: ["invocation_coverage", "total_sites"],
+          message:
+            "Total invocation count cannot be smaller than retained sites.",
+        });
+      const validStatus =
+        (coverage.status === "complete" &&
+          coverage.total_sites === coverage.retained_sites &&
+          coverage.limit_reason === null) ||
+        (coverage.status === "partial" &&
+          coverage.total_sites > coverage.retained_sites &&
+          coverage.limit_reason !== null &&
+          coverage.limit_reason !== "code_unavailable") ||
+        (coverage.status === "unavailable" &&
+          coverage.total_sites === 0 &&
+          coverage.retained_sites === 0 &&
+          coverage.limit_reason === "code_unavailable");
+      if (!validStatus)
+        context.addIssue({
+          code: "custom",
+          path: ["invocation_coverage"],
+          message:
+            "Invocation status, counts and limit reason are inconsistent.",
+        });
+    }),
   trace_android_references: z.strictObject({
     ...common,
     /** Older retained Evidence omits this fact; omission does not mean external. */
