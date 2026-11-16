@@ -7,25 +7,25 @@ workspace file limit. It is a runbook: orient, provision, verify, investigate.
 ## 0. Orient (every session, one call)
 
 ```bash
-bash scripts/sandbox/bootstrap.sh --check --json
+node scripts/sandbox.mjs status --json
 ```
 
-Cheap and side-effect free. `ready:false` means the container reset or was never
-provisioned. `deep_analysis:false` only means no decompiler is installed;
-engine-free analysis still works.
+One dependency-free process, no npm, no network. `ready:false` means the
+container reset or was never provisioned. `deep_analysis:false` only means no
+decompiler is installed; engine-free analysis still works. Add `--strict` when
+the task needs Ghidra.
 
 ## 1. Provision what is missing
 
 ```bash
-bash scripts/sandbox/bootstrap.sh                 # ~42 s: Node, swap, host tools, pwntools, build
-bash scripts/sandbox/bootstrap.sh --with-native   # adds JDK 25 + Ghidra (minutes, ~570 MB)
+node scripts/sandbox.mjs install                   # ~42 s cold, ~2 s warm: Node, swap, host tools, pwntools, build
+node scripts/sandbox.mjs install --profile native  # adds JDK 25 + Ghidra (minutes, ~570 MB)
+node scripts/sandbox.mjs install --plan            # print the plan, change nothing
 ```
 
-Then load engine paths and host budgets in every shell:
-
-```bash
-set -a; . ./.rea-sandbox.env; set +a
-```
+`.rea-sandbox.env` is applied automatically by `scripts/rea.mjs` and by
+`sandbox run`; sourcing it (`set -a; . ./.rea-sandbox.env; set +a`) is optional.
+Recreate it with `node scripts/sandbox.mjs env --write` if it is missing.
 
 Skip the client-registration and `rea setup` recovery ladders in
 [connection and recovery](connection-and-recovery.md): this host has no client to
@@ -35,7 +35,7 @@ register, and `doctor` reporting `hopper`, `ida-registration`, `jadx`,
 ## 2. Verify instead of assuming
 
 ```bash
-node scripts/sandbox/verify-sandbox.mjs --quick   # seconds
+node scripts/sandbox.mjs verify --quick   # seconds; probes run concurrently
 ```
 
 Each `ok` row is a command that exited 0 with an Evidence record on this host.
@@ -54,8 +54,13 @@ retry.
 | Firmware, WASM, Android code, ADB, browser, Frida, LLDB, Hopper, IDA, JEB, Kuna                        | **do not start**                                          | caller-supplied engine, device, browser build or macOS host |
 
 Invoke through the CLI with absolute paths:
-`node scripts/rea.mjs <command> /abs/path --json`. From outside a checkout use
+`node scripts/sandbox.mjs run <command> /abs/path --json` (same process, with the
+sandbox environment applied). From outside a checkout use
 `npx -y rea-agents@latest <command> /abs/path --json` instead.
+
+For a sweep, `node scripts/sandbox.mjs batch --file tasks.txt --out results.jsonl`
+runs many commands in one call, reports per-command status and timing, and keeps
+Ghidra work serial.
 
 ## 4. Budget the host, not just the tokens
 
@@ -81,10 +86,10 @@ instead of paraphrasing "analysis failed".
 
 ## 6. Recovery ladder
 
-1. **`NEEDS PROVISIONING`** → `bash scripts/sandbox/bootstrap.sh` (never hand-edit
+1. **`NEEDS PROVISIONING`** → `node scripts/sandbox.mjs install` (never hand-edit
    engine paths).
 2. **Workspace looks incomplete** (no tests, no website, no CI) → expected in the
-   slim profile; `bash scripts/sandbox/slim-repo.sh --restore` restores it from git.
+   slim profile; `node scripts/sandbox.mjs slim --restore` restores it from git.
 3. **`provider_unavailable`** → read `details.rejections[]`; fix or report.
 4. **`unsupported_version`** → compare with the pinned requirement (JDK 25+,
    Ghidra 12.1+, WABT 1.0.42, Binwalk 3.1.x, Unblob 26.6.x) and stop if the host

@@ -8,50 +8,59 @@ license. This checkout is their work in a **slim, headless-sandbox profile**:
 ~3.2k files instead of ~7.2k, so it fits an agent workspace budget (10k files).
 Development-only material (test suites, the documentation website, CI, release
 and lint tooling, translated READMEs) was removed by
-`scripts/sandbox/slim-repo.sh`. Nothing that runs during an investigation was
+`node scripts/sandbox.mjs slim`. Nothing that runs during an investigation was
 removed: `src/`, `scripts/`, `bridge/`, the `docs/*.md` guides, the workflow
 skill and the sandbox tooling are all present. Restore anything with
-`bash scripts/sandbox/slim-repo.sh --restore`, or clone
+`node scripts/sandbox.mjs slim --restore`, or clone
 [morluto/rea](https://github.com/morluto/rea) for full fidelity. Provenance and
 third-party terms: [CREDITS.md](CREDITS.md).
 
 ### 1. Orient in one call
 
 ```bash
-bash scripts/sandbox/bootstrap.sh --check        # add --json for machine reading
+node scripts/sandbox.mjs status        # add --json (or --json path) for machine reading
 ```
 
-Cheap and side-effect free (no npm, no network). It prints `READY` or
-`NEEDS PROVISIONING` plus exactly which rows are missing. Run this first instead
-of guessing whether the checkout is built.
+One dependency-free process, no npm, no network, well under 100 ms. It prints a
+row per check — node, dependencies, runtime, env-file, JDK, Android engines,
+Ghidra, pwntools, host tools, memory, disk — then `READY` or
+`NEEDS PROVISIONING` and the exact command that fixes each gap. Use `--strict`
+when the task needs decompilation and therefore Ghidra.
 
 ### 2. Provision what is missing
 
 ```bash
-bash scripts/sandbox/bootstrap.sh                 # ~42 s: Node, swap, host tools, pwntools venv, build
-bash scripts/sandbox/bootstrap.sh --with-native   # adds JDK 25 + Ghidra (~570 MB) for decompilation
+node scripts/sandbox.mjs install                   # ~42 s cold, ~2 s warm: Node, swap, host tools, pwntools venv, build
+node scripts/sandbox.mjs install --profile native  # adds JDK 25 + Ghidra (~570 MB) for decompilation
 ```
 
-Both are idempotent and write only `/opt/rea-engines` and the gitignored
-`.rea-sandbox.env`. Then load the exports in every shell:
+`install` is idempotent, skips itself when the requested profile is already
+satisfied (`--force` reinstalls), reuses a current `node_modules` instead of
+running `npm ci` again, and writes only `/opt/rea-engines` plus the gitignored
+`.rea-sandbox.env`. `--plan` prints the provisioner's plan without changing
+anything.
 
-```bash
-set -a; . ./.rea-sandbox.env; set +a
-```
+`.rea-sandbox.env` is applied automatically by `scripts/rea.mjs` and by
+`sandbox run`; sourcing it is optional (`set -a; . ./.rea-sandbox.env; set +a`).
+Override or disable the file with `REA_SANDBOX_ENV=<path>` or
+`REA_SANDBOX_ENV=0`, and recreate it after a container reset with
+`node scripts/sandbox.mjs env --write`.
 
-Containers reset between sessions: if `bootstrap.sh --check` fails, re-run
-`bootstrap.sh` before anything else.
+Containers reset between sessions: if `status` exits 1, re-run `install` before
+anything else.
 
 ### 3. Verify instead of assuming
 
 ```bash
-node scripts/sandbox/verify-sandbox.mjs --quick        # seconds
-node scripts/sandbox/verify-sandbox.mjs --json docs/sandbox-capability-report.json
+node scripts/sandbox.mjs verify --quick                # seconds (probes run concurrently)
+node scripts/sandbox.mjs verify --filter ghidra --all  # one area, deep probes
+node scripts/sandbox.mjs report                        # status + matrix -> docs/sandbox-capability-report.json
 ```
 
 Each `ok` row is a command that exited 0 with an Evidence record on _this_ host.
 `needs-config` and `unsupported` rows are limits to report, not failures to
-retry.
+retry. `verify --json` prints the report; `--json <path>` writes it and keeps the
+table.
 
 ### 4. Investigate
 
@@ -65,9 +74,24 @@ retry.
 
 Prefer the cheapest route that answers the question, and escalate only for a
 question the cheap route cannot answer. Everything is available through the CLI
-(`node scripts/rea.mjs <command> <absolute-path> --json`); this host has no MCP
-client to register against, so skip the client-recovery ladders in
+(`node scripts/sandbox.mjs run <command> <absolute-path> --json`, or
+`node scripts/rea.mjs ...` directly); this host has no MCP client to register
+against, so skip the client-recovery ladders in
 `references/connection-and-recovery.md`.
+
+For a sweep, `sandbox batch` runs several commands in one call and keeps native
+(Ghidra) work serial:
+
+```bash
+node scripts/sandbox.mjs batch \
+  --task "inspect-artifact /abs/a.zip --json" \
+  --task "analyze-javascript-application /abs/app --json" \
+  --out results.jsonl
+```
+
+Task files accept one command per line (quotes work) or a JSON array of argv
+arrays, strings or `{label, argv}` objects. `--concurrency` defaults to 2, or 1
+when a task loads Ghidra.
 
 ### Host facts and budgets
 
@@ -190,11 +214,13 @@ and keep `/usr/local/bin` first on `PATH` (`export PATH="/usr/local/bin:$PATH"`)
 - `npm run typecheck` — TypeScript gate; works here and is the primary signal.
 - `npm run verify:module-boundaries` — architecture guard over `src/`.
 - `npm run format` / `npm run format:check` — `oxfmt`; keep the tree formatted.
-- `npm run sandbox:check` — typecheck + boundaries + capability report in one pass.
-- `npm run sandbox:bootstrap` — provision and verify from a bare container.
-- `npm run sandbox:slim` — re-apply (or `--restore`) the slim profile.
+- `npm run sandbox:check` — typecheck + boundaries + quick capability check.
+- `node scripts/sandbox.mjs install` — provision and verify from a bare container.
+- `node scripts/sandbox.mjs slim` — re-apply (or `--restore`) the slim profile.
+- `node scripts/sandbox.mjs status|verify|run|batch|env|report` — the rest of the
+  sandbox lifecycle; `node scripts/sandbox.mjs help` lists every option.
 
-**What this profile removed.** `scripts/sandbox/slim-repo.sh` deleted the test
+**What this profile removed.** `node scripts/sandbox.mjs slim` deleted the test
 suites (`tests/`, `src/**/*.test.ts`), the documentation website, `.github` CI,
 the translated READMEs, the changelog, and the lint/mutation/release tooling, to
 fit an agent workspace file budget. Consequences:
@@ -205,7 +231,7 @@ fit an agent workspace file budget. Consequences:
 - `oxlint` additionally aborts in this container on any input (an
   `oxc_allocator` panic), so even a restored tree cannot lint here.
 - To work on upstream-facing changes, restore first
-  (`bash scripts/sandbox/slim-repo.sh --restore`) or clone
+  (`node scripts/sandbox.mjs slim --restore`) or clone
   [morluto/rea](https://github.com/morluto/rea), then use [CONTRIBUTING.md](CONTRIBUTING.md)
   and the gates it describes.
 

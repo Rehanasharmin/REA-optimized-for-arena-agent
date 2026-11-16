@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/license-MIT-f4c430?style=flat-square)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22.x%20%7C%2024.x%20%7C%2026.12.1%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](#requirements)
 
-<code>bash scripts/sandbox/bootstrap.sh</code>
+<code>node scripts/sandbox.mjs install</code>
 
 </div>
 
@@ -24,9 +24,12 @@ If you are not specifically working in that sandbox, **use upstream instead**: [
 
 ## What this fork changes
 
-- **Sandbox-first entrypoint.** A bootstrap script provisions Node.js, JDK 25, Apktool, `jadx-headless-mcp`, and `pwntools` into `/opt/rea-engines` (with allowed-registry fallbacks over npm, PyPI, and GitHub when OS mirrors are blocked), writes a gitignored `.rea-sandbox.env`, and verifies what actually works on the host.
+- **One command for the whole lifecycle.** [`scripts/sandbox.mjs`](scripts/sandbox.mjs) replaces `bootstrap.sh`, `verify-sandbox.mjs` and `slim-repo.sh` with `status`, `install`, `verify`, `run`, `batch`, `slim`, `env` and `report`. One file, no dependencies, no shell glue.
+- **Sandbox-first provisioning.** `install` fetches Node.js, JDK 25, Apktool, `jadx-headless-mcp` and `pwntools` into `/opt/rea-engines` (with allowed-registry fallbacks over npm, PyPI and GitHub when OS mirrors are blocked), writes a gitignored `.rea-sandbox.env`, and verifies what actually works on the host.
+- **No export step.** `scripts/rea.mjs` and `sandbox run` load `.rea-sandbox.env` automatically, so `set -a; . ./.rea-sandbox.env; set +a` is optional.
+- **Faster feedback loops.** `status` is a single dependency-free process that answers in well under 100 ms with no npm and no network; `verify` probes concurrently instead of one CLI start per row; a warm re-provision skips `npm ci` while `node_modules` still matches the lockfile; `batch` runs a sweep of analyses in one call.
 - **CLI-driven, no MCP client required.** The host drives REA through `node scripts/rea.mjs`, not a registered MCP server.
-- **Trimmed checkout.** Development material removed for the file budget can be restored with `bash scripts/sandbox/slim-repo.sh --restore`.
+- **Trimmed checkout.** Development material removed for the file budget can be restored with `node scripts/sandbox.mjs slim --restore`.
 - **Honest limits.** Hopper, IDA, JEB, ADB, browsers, Frida, firmware, and WASM are not available in the default sandbox; the verified capability matrix lives in [docs/sandbox-environment.md](docs/sandbox-environment.md).
 
 Nothing in the analysis engines or Evidence model has been forked or reimplemented — it is all upstream code.
@@ -34,18 +37,32 @@ Nothing in the analysis engines or Evidence model has been forked or reimplement
 ## Sandbox quick start
 
 ```bash
-bash scripts/sandbox/bootstrap.sh --check         # is this container ready?
-bash scripts/sandbox/bootstrap.sh                 # provision + build (~40 s warm, 42 s cold)
-bash scripts/sandbox/bootstrap.sh --with-native   # add JDK 25 + Ghidra decompilation
+node scripts/sandbox.mjs status                    # is this container ready? (no npm, no network)
+node scripts/sandbox.mjs install                   # provision + build (~40 s warm, 42 s cold)
+node scripts/sandbox.mjs install --profile native  # add JDK 25 + Ghidra decompilation
+node scripts/sandbox.mjs verify --quick            # prove what works here
 
-set -a; . ./.rea-sandbox.env; set +a              # engine paths and host budgets
-
-node scripts/sandbox/verify-sandbox.mjs --quick            # prove what works here
-node scripts/rea.mjs analyze-javascript-application /abs/path/to/app --json
-node scripts/rea.mjs analyze /abs/path/to/binary --json    # needs --with-native
+node scripts/sandbox.mjs run analyze-javascript-application /abs/path/to/app --json
+node scripts/sandbox.mjs run analyze /abs/path/to/binary --json    # --profile native
 ```
 
-Everything above is idempotent, writes only `/opt/rea-engines` plus the gitignored `.rea-sandbox.env`, and needs no MCP client.
+Everything above is idempotent, writes only `/opt/rea-engines` plus the gitignored `.rea-sandbox.env`, and needs no MCP client. The environment file is picked up automatically — sourcing it is no longer required.
+
+### Sandbox commands
+
+| Command       | What it does                                                                                                                                                            | Typical cost         |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| `status`      | Per-check readiness report: node, deps, runtime, JDK, Ghidra, JADX, apktool, pwntools, host tools, RAM, disk. `--json`, `--strict`. Exit 1 when provisioning is needed. | < 100 ms             |
+| `install`     | Provision what is missing and build. `--profile agent\|native\|minimal\|gdb\|browser\|full`, `--plan`, `--force`. Skips itself when the profile is already satisfied.   | 2 s warm, ~42 s cold |
+| `verify`      | Re-derive the capability matrix against generated fixtures. `--quick`, `--all`, `--filter`, `--concurrency`, `--json <path>`.                                           | seconds              |
+| `run`         | Run the REA CLI with the sandbox environment loaded and the exit status forwarded. `--timings`, `--no-env`.                                                             | one CLI call         |
+| `batch`       | Run many REA commands in one call; JSONL per-command status, timing and Evidence ids. Native commands stay serial.                                                      | one sweep            |
+| `slim`        | Trim the checkout to the agent file budget, or `--restore` it from git. `--dry-run`, `--json`.                                                                          | seconds              |
+| `env`         | Print, `export`, `--write` the derived sandbox environment (memory budgets, engine paths).                                                                              | < 100 ms             |
+| `report`      | Write the combined status + capability report to `docs/sandbox-capability-report.json`.                                                                                 | seconds              |
+| `completions` | Print bash/zsh completion for the CLI.                                                                                                                                  | instant              |
+
+`npm run sandbox:status`, `sandbox:install`, `sandbox:verify`, `sandbox:slim`, `sandbox:run`, `sandbox:batch`, `sandbox:env` and `sandbox:report` wrap the same commands (`sandbox:bootstrap` and `sandbox:provision` are kept as aliases). The old script files are gone; their replacements are listed in the [migration table](docs/sandbox-environment.md#replacing-the-old-scripts).
 
 Agents should read [AGENTS.md](AGENTS.md) first — it is the runbook — then [docs/sandbox-environment.md](docs/sandbox-environment.md) for the verified capability matrix, honest limits, and the troubleshooting ladder.
 
@@ -79,10 +96,12 @@ For the full upstream feature list — Android, iOS, firmware, WASM, network cap
 ## Documentation in this fork
 
 - [AGENTS.md](AGENTS.md) — the sandbox runbook
-- [docs/sandbox-environment.md](docs/sandbox-environment.md) — capability matrix and honest limits
+- [docs/sandbox-environment.md](docs/sandbox-environment.md) — the sandbox CLI, capability matrix and honest limits
 - [CREDITS.md](CREDITS.md) — upstream attribution
 - [docs/installation.md](docs/installation.md) — upstream setup reference
 - [docs/cli.md](docs/cli.md) — upstream CLI reference
+
+Run `node scripts/sandbox.mjs help` (or `help <command>`) for the full option list.
 
 Report vulnerabilities through [SECURITY.md](SECURITY.md).
 
