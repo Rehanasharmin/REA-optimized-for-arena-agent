@@ -120,9 +120,9 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "start": "node scripts/rea.mjs mcp",
-    "sandbox:provision": "bash scripts/sandbox/provision-sandbox.sh",
-    "sandbox:verify": "node scripts/sandbox/verify-sandbox.mjs",
-    "sandbox:check": "npm run typecheck && npm run verify:module-boundaries && npm run sandbox:verify",
+    "sandbox:provision": "node scripts/sandbox.mjs install --no-verify",
+    "sandbox:verify": "node scripts/sandbox.mjs verify",
+    "sandbox:check": "npm run typecheck && npm run verify:module-boundaries && node scripts/sandbox.mjs verify --quick",
     "typecheck": "node scripts/run-typescript.mjs --noEmit",
     "prepack": "node scripts/prepack.mjs",
     "verify:module-boundaries": "node scripts/verify-module-boundaries.mjs",
@@ -133,8 +133,14 @@
     "artifacts:product-catalog": "node scripts/generate-product-catalog.mjs",
     "artifacts:managed-evidence": "node scripts/generate-completion-ledger.mjs",
     "artifacts:error-schema": "node scripts/generate-error-schema.mjs",
-    "sandbox:bootstrap": "bash scripts/sandbox/bootstrap.sh",
-    "sandbox:slim": "bash scripts/sandbox/slim-repo.sh"
+    "sandbox:bootstrap": "node scripts/sandbox.mjs install",
+    "sandbox:slim": "node scripts/sandbox.mjs slim",
+    "sandbox:status": "node scripts/sandbox.mjs status",
+    "sandbox:report": "node scripts/sandbox.mjs report",
+    "sandbox:run": "node scripts/sandbox.mjs run",
+    "sandbox:install": "node scripts/sandbox.mjs install",
+    "sandbox:batch": "node scripts/sandbox.mjs batch",
+    "sandbox:env": "node scripts/sandbox.mjs env"
   },
   "lint-staged": {
     "*.{cjs,cts,js,jsx,mjs,mts,ts,tsx}": [

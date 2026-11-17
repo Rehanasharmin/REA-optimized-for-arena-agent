@@ -15,6 +15,12 @@ without a global installation:
 npx -y rea-agents@latest analyze-javascript-application /absolute/path/to/app --json
 ```
 
+> **Sandbox edition.** Inside the checkout,
+> `node scripts/sandbox.mjs run <command> /abs/path --json` applies
+> `.rea-sandbox.env`, forwards the exit status and needs no `source` step;
+> `node scripts/sandbox.mjs batch --file tasks.txt` runs a sweep in one call. See
+> [the sandbox runbook](sandbox-environment.md).
+
 Use an extracted application directory or an ASAR as the target. Static
 JavaScript analysis returns the application graph and Evidence directly.
 Generic `rea analyze PATH` selects this workflow for directories and `.asar`

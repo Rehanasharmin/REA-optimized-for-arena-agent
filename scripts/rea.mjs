@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { prepareCliProcessEnvironment } from "./lib/cli-process-environment.mjs";
@@ -13,12 +14,18 @@ const args = process.argv.slice(2);
 const { default: packageJson } = await import("../package.json", {
   with: { type: "json" },
 });
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Sandbox edition: apply the machine-local engine exports the provisioner wrote
+// (`node scripts/sandbox.mjs install`) so no `set -a; . ./.rea-sandbox.env` step
+// is needed before every call. Explicit shell values win, and PATH only gains
+// entries it is missing. Disable with REA_SANDBOX_ENV=0, or point that variable
+// at another export file.
+loadSandboxEnvironment(process.env, packageRoot);
 prepareCliProcessEnvironment(
   process.env,
   process.platform,
   packageJson.version,
 );
-const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const builtinArgumentRuntime = "dist/cli-runtime/cliBuiltinArguments.js";
 const builtinArguments = (await compiledRuntimeExists([builtinArgumentRuntime]))
   ? await import("../dist/cli-runtime/cliBuiltinArguments.js")
@@ -275,15 +282,46 @@ function writeStdout(output) {
 }
 
 async function compiledRuntimeExists(paths) {
-  for (const path of paths) {
-    try {
-      await access(resolve(packageRoot, path));
-    } catch (cause) {
-      if (isMissing(cause)) return false;
-      throw cause;
-    }
+  // One parallel probe instead of a sequential stat chain: startup is on the hot
+  // path of every CLI call.
+  const present = await Promise.all(
+    paths.map(async (path) => {
+      try {
+        await access(resolve(packageRoot, path));
+        return true;
+      } catch (cause) {
+        if (isMissing(cause)) return false;
+        throw cause;
+      }
+    }),
+  );
+  return present.every(Boolean);
+}
+
+function loadSandboxEnvironment(environment, root) {
+  const configured = environment.REA_SANDBOX_ENV;
+  if (configured === "0" || configured === "off") return;
+  let text;
+  try {
+    text = readFileSync(configured ?? join(root, ".rea-sandbox.env"), "utf8");
+  } catch {
+    return;
   }
-  return true;
+  for (const line of text.split("\n")) {
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line.trim());
+    if (match === null) continue;
+    const [, key, rawValue] = match;
+    const value = rawValue.replace(/^"(.*)"$/, "$1");
+    if (key === "PATH") {
+      const existing = (environment.PATH ?? "").split(":").filter(Boolean);
+      const additions = value
+        .split(":")
+        .filter((entry) => entry !== "" && !existing.includes(entry));
+      environment.PATH = [...additions, ...existing].join(":");
+      continue;
+    }
+    if (environment[key] === undefined) environment[key] = value;
+  }
 }
 
 function isMissing(cause) {

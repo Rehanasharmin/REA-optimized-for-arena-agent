@@ -52,25 +52,24 @@ user. REA grants no license, key or entitlement for them.
 
 This fork is an environment adaptation, not a reimplementation.
 
-| Path                                        | Purpose                                                                                                                                          |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `scripts/sandbox/bootstrap.sh`              | One-command entry point: instant status (`--check`, `--json`), then provision only what is missing and verify.                                   |
-| `scripts/sandbox/provision-sandbox.sh`      | Idempotent provisioning of Node.js, a swapfile, host tools and the pwntools venv (default profile), plus JDK 25 and Ghidra with `--with-native`. |
-| `scripts/sandbox/verify-sandbox.mjs`        | Re-derives a capability matrix on the host and writes `docs/sandbox-capability-report.json`.                                                     |
-| `scripts/sandbox/slim-repo.sh`              | Deterministically trims the checkout to an agent file budget (~7.2k to ~3.2k files) and restores it from git on demand.                          |
-| `docs/sandbox-environment.md`               | Environment profile, verified matrix, limits, file budget, resource discipline, troubleshooting ladder.                                          |
-| `AGENTS.md` (leading sections)              | The agent runbook: orient, provision, verify, route, budget. Upstream guidelines follow unchanged.                                               |
-| `.agents/skills/reverse-engineer-anything/` | Sandbox section, a `references/sandbox-environment.md` runbook, and skill version bumps so installs refresh.                                     |
-| `README.md`                                 | A sandbox quickstart and attribution block; the rest is upstream text with links to removed files repaired.                                      |
-| `.rea-sandbox.env` (generated, gitignored)  | Machine-specific engine paths and budget knobs for the current container.                                                                        |
+| Path                                        | Purpose                                                                                                                                                                                                                                                   |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/sandbox.mjs`                       | One dependency-free CLI for the whole sandbox lifecycle: `status`, `install`, `verify`, `run`, `batch`, `slim`, `env`, `report`, `completions`, `help`. Parallel probes, JSON documents (`schema_version: 2`), preflight checks and idempotent behaviour. |
+| `scripts/sandbox/provision-sandbox.sh`      | Idempotent provisioning of Node.js, a swapfile, host tools and the pwntools venv (default profile), plus JDK 25 and Ghidra with `--with-native`. Reuses a current `node_modules` instead of re-running `npm ci`.                                          |
+| `scripts/rea.mjs` (fork patch)              | Applies `.rea-sandbox.env` automatically before dispatch (opt out with `REA_SANDBOX_ENV=0`), and probes the runtime in parallel at startup.                                                                                                               |
+| `docs/sandbox-environment.md`               | Environment profile, verified matrix, limits, file budget, resource discipline, troubleshooting ladder.                                                                                                                                                   |
+| `AGENTS.md` (leading sections)              | The agent runbook: orient, provision, verify, route, budget. Upstream guidelines follow unchanged.                                                                                                                                                        |
+| `.agents/skills/reverse-engineer-anything/` | Sandbox section, a `references/sandbox-environment.md` runbook, and skill version bumps so installs refresh.                                                                                                                                              |
+| `README.md`                                 | A sandbox quickstart and attribution block; the rest is upstream text with links to removed files repaired.                                                                                                                                               |
+| `.rea-sandbox.env` (generated, gitignored)  | Machine-specific engine paths and budget knobs for the current container.                                                                                                                                                                                 |
 
-**Removed material.** `scripts/sandbox/slim-repo.sh` deletes what never runs during
+**Removed material.** `node scripts/sandbox.mjs slim` deletes what never runs during
 an investigation, to stay inside an agent workspace file budget: the Vitest suites
 and goldens (`tests/`, `src/**/*.test.ts`), the documentation website, the
 translated READMEs, `.github` CI, the changelog, and the
 lint/mutation/coverage/release tooling. Those are upstream _test and release_
 artifacts, not upstream features — no analysis capability was removed. Run
-`bash scripts/sandbox/slim-repo.sh --restore` (git-backed) or clone
+`node scripts/sandbox.mjs slim --restore` (git-backed) or clone
 [morluto/rea](https://github.com/morluto/rea) to get them back before contributing
 upstream.
 

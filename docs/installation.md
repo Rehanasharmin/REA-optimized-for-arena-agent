@@ -3,6 +3,12 @@
 Run REA, connect your selected agents, and check the tools needed for your task.
 Setup previews configuration changes and asks for approval before applying them.
 
+> **Sandbox edition.** In a headless container this fork provisions engines with
+> `node scripts/sandbox.mjs install`, applies `.rea-sandbox.env` automatically and
+> verifies the host with `node scripts/sandbox.mjs verify --quick`. See
+> [REA in a headless agent sandbox](sandbox-environment.md). Everything below
+> still applies to a normal desktop installation.
+
 | Task                               | Section                                                                                             |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------- |
 | Connect an agent                   | [Start setup](#start-setup), then [review changes](#review-setup-changes)                           |
